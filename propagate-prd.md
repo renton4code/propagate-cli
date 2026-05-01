@@ -15,12 +15,14 @@ The initial product focuses on developer teams using `.env` files. Future releas
 - Use a project-level config file in Git to make team membership and access changes reviewable.
 - Support common local development layouts, including monorepos and multiple env files.
 - Give admins visibility into pending joins, scope changes, and last secret pulls.
+- Make Propagate safe and predictable for AI coding agents that operate through terminal tools and repository instructions.
 
 ## 3. Non-Goals For MVP
 
 - CI/CD integration.
 - `propagate run` or process-level secret injection.
 - Production runtime agent.
+- Dedicated AI agent identities or autonomous secret access separate from a human user's local Propagate identity.
 - Web dashboard.
 - SSO or enterprise identity providers.
 - Secret rotation automation.
@@ -153,6 +155,12 @@ Initializes the local user identity and, if the repo is not already configured, 
    - Encrypt values locally for the selected scope.
    - Store encrypted secrets in the cloud.
    - Save team config to `propagate.yaml` without writing any env values to the config.
+7. Offer to add or update AI agent guidance for the repository:
+   - Detect known agent instruction and skill locations.
+   - Explain that this creates agent-facing instructions only, not secret access.
+   - Add a Propagate skill or managed instruction block when the user confirms.
+   - Never include env values, masked values, private keys, access tokens, or decrypted output in agent guidance.
+   - Preserve existing user-authored agent instructions.
 
 #### Success Output
 
@@ -163,6 +171,7 @@ The command should clearly report:
 - Whether project config was created or already existed.
 - Which scopes were created.
 - How many variables were encrypted and uploaded.
+- Whether AI agent guidance was added, updated, skipped, or unavailable.
 
 #### Error Cases
 
@@ -173,6 +182,7 @@ The command should clearly report:
 - `.env` cannot be read.
 - Cloud API is unavailable.
 - User does not confirm env import.
+- Cannot safely update detected agent instruction or skill files.
 
 ### 6.2 `propagate team join`
 
@@ -479,7 +489,89 @@ Actions:
 - View public key details.
 - Cancel push.
 
-## 8. Config File Shape
+## 8. First-Class AI Agent Support
+
+AI coding agents are expected to work inside repositories, edit files, and call terminal tools. Propagate should make those agents safer by giving them explicit repository-local instructions and machine-friendly command behavior.
+
+### 8.1 Agent Guidance During Init
+
+`propagate init` should offer to add or update agent guidance after project setup or after detecting an existing `propagate.yaml`.
+
+Supported guidance targets should include:
+
+- Generic repository instructions, such as `AGENTS.md`, when present or selected by the user.
+- Codex-style repo skills, when the repository uses a skill directory.
+- Other known agent instruction files, such as Cursor rules, Claude instructions, or GitHub Copilot instructions, when detected.
+
+The MVP should not require every ecosystem to be supported perfectly. It should start with a generic instruction file and a Propagate skill template, then allow future adapters.
+
+The generated guidance should tell agents:
+
+- Use Propagate commands instead of reading, copying, or inventing env values.
+- Treat all env values as confidential, including public-looking values.
+- Never write env values to `propagate.yaml`, agent instructions, docs, prompts, test fixtures, or commits.
+- Prefer `propagate config status`, `propagate team status`, and `propagate env status` for discovery.
+- Prefer `--json` for machine-readable status output.
+- Prefer `--dry-run` before any command that writes local files or cloud state.
+- Require human confirmation before running `propagate env pull`, `propagate env push`, or `propagate config push`.
+- Report permission errors and pending join requirements clearly instead of attempting workarounds.
+
+Agent guidance is not an access-control system. Agents operate with the user's local filesystem and identity. Propagate must still enforce permissions in the CLI and cloud API.
+
+### 8.2 Skill And Instruction File Behavior
+
+When Propagate edits an agent instruction or skill file, it should:
+
+- Use a clearly marked managed block.
+- Preserve user-authored content outside the managed block.
+- Be idempotent when run multiple times.
+- Include the Propagate CLI version or template version used to generate the block.
+- Avoid writing any env values, private key paths beyond `~/.propagate`, decrypted output, or cloud tokens.
+- Show a diff preview before modifying existing files.
+- Support a skip path for teams that do not want generated agent instructions.
+
+If a repository has multiple agent systems configured, the TUI should let the user choose which targets to update.
+
+### 8.3 Tool-Agent-Friendly CLI Behavior
+
+Propagate commands should be easy for tool-using agents to call safely.
+
+Agent-friendly behavior includes:
+
+- Stable exit codes for success, validation failure, permission denied, cloud unavailable, conflict, and canceled operation.
+- Stable `--json` output for status and dry-run commands.
+- Non-interactive failure instead of hanging when stdin is not a TTY.
+- Clear separation between human-readable summaries and machine-readable JSON.
+- No plaintext env values in stdout, stderr, logs, JSON, or panic output.
+- Operation IDs included in JSON responses for traceability.
+- Error messages that include safe next steps, such as "run `propagate team join`" or "ask an admin to approve access."
+
+Agent-friendly behavior must not bypass human approval. Commands that can write env files, upload encrypted env values, approve access, or mutate config should require explicit confirmation unless a user intentionally passes a non-interactive approval flag.
+
+### 8.4 Agent Audit Metadata
+
+When the CLI can detect that it is being run by an AI tool agent, it should include safe agent metadata in cloud audit events.
+
+Allowed metadata:
+
+- CLI version.
+- Client kind, such as human terminal, script, or AI agent.
+- Agent adapter name, when known.
+- Operation ID.
+- Command name.
+
+Disallowed metadata:
+
+- Prompt text.
+- Conversation content.
+- Env values.
+- Masked env values.
+- Private key material.
+- Absolute local paths outside the repository-relative env file mapping.
+
+Agent metadata should help teams understand how changes were made without exposing user prompts or secrets.
+
+## 9. Config File Shape
 
 Example `propagate.yaml`:
 
@@ -531,9 +623,9 @@ pending:
   access_changes: []
 ```
 
-## 9. Cloud Data Model
+## 10. Cloud Data Model
 
-### 9.1 Stored In Cloud
+### 10.1 Stored In Cloud
 
 Cloud stores:
 
@@ -553,7 +645,7 @@ Cloud does not store:
 
 `propagate.yaml` also does not store plaintext env values, even when a value is considered public or non-secret. Treating all env values as config-external prevents accidental leakage and keeps the Git-reviewed file metadata-only.
 
-### 9.2 Secret Storage Model
+### 10.2 Secret Storage Model
 
 Recommended model:
 
@@ -563,7 +655,7 @@ Recommended model:
 4. When access is granted, an admin client uploads a new encrypted envelope for that member.
 5. When access is revoked, future versions are no longer encrypted for that member.
 
-### 9.3 Audit Events
+### 10.3 Audit Events
 
 Events to record:
 
@@ -588,7 +680,7 @@ Pull events should include:
 - CLI version.
 - Config revision.
 
-## 10. Permissions
+## 11. Permissions
 
 MVP permission model:
 
@@ -612,7 +704,7 @@ Expected behavior:
 - `write`: can read and push env changes.
 - `admin`: can manage config, approve joins, approve role changes, and write all scopes unless restricted later.
 
-## 11. Monorepo Support
+## 12. Monorepo Support
 
 Propagate should support multiple env files per project and per scope.
 
@@ -651,7 +743,7 @@ Recommended defaults:
 - Exclude files under `node_modules`, `dist`, `build`, `coverage`, `.next`, `.turbo`, cache folders, fixtures, and examples.
 - Warn when multiple selected files contain the same variable name in the same scope.
 
-## 12. Security Requirements
+## 13. Security Requirements
 
 - Never write env values to `propagate.yaml`, including public, non-secret, placeholder, masked, or example values.
 - Never upload plaintext env values to cloud when end-to-end encryption mode is enabled.
@@ -660,6 +752,8 @@ Recommended defaults:
 - Warn before writing `prod` env values to a local `.env` file.
 - Mask env values in all TUI and command output.
 - Avoid logging plaintext env values.
+- Never write env values into generated agent instructions, skills, prompts, or tool logs.
+- Generated agent guidance must not contain private keys, access tokens, decrypted output, or cloud service credentials.
 - Include config revision in cloud writes to prevent accidental overwrite.
 - Use HTTPS for all cloud communication.
 - Use modern cryptography:
@@ -667,7 +761,7 @@ Recommended defaults:
   - Prefer X25519 or age-style recipients for encryption.
   - Avoid raw RSA encryption for new designs unless compatibility requires it.
 
-## 13. Git Workflow
+## 14. Git Workflow
 
 `propagate.yaml` is intended to be committed.
 
@@ -700,7 +794,7 @@ git commit -m "Approve Propagate access"
 git push
 ```
 
-## 14. Success Metrics
+## 15. Success Metrics
 
 MVP success metrics:
 
@@ -712,8 +806,10 @@ MVP success metrics:
 - Number of secret pushes per team per week.
 - Number of failed pulls due to permission issues.
 - Number of users with stale pulls.
+- Percentage of initialized repositories with Propagate agent guidance installed.
+- Number of successful dry-run operations initiated from agent-friendly JSON flows.
 
-## 15. Release Scope
+## 16. Release Scope
 
 ### MVP
 
@@ -732,6 +828,9 @@ MVP success metrics:
 - Cloud encrypted secret storage.
 - Git-backed `propagate.yaml`.
 - Monorepo env file mapping.
+- Agent guidance prompt during `propagate init`.
+- Generated Propagate skill or managed instruction block for supported agent systems.
+- Stable JSON output and exit codes for status and dry-run commands.
 
 ### Later
 
@@ -745,8 +844,10 @@ MVP success metrics:
 - Hardware-backed keys.
 - Policy-as-code.
 - Automatic leak scanning on commit.
+- Dedicated non-human AI agent identities with explicit scopes.
+- Agent-specific approval policies and richer audit dashboards.
 
-## 16. Suggestions, Design Issues, And Open Questions
+## 17. Suggestions, Design Issues, And Open Questions
 
 ### Suggestions
 
@@ -758,6 +859,7 @@ MVP success metrics:
 - Treat every env value as confidential for storage purposes, even when a user describes it as public.
 - Add a `--dry-run` option to `env push`, `env pull`, and `config push`.
 - Add a `--json` output mode for status commands so future CI and scripts can consume them.
+- Add an agent guidance installer to `propagate init` and make it re-runnable without changing unrelated instruction content.
 - Store enough audit metadata now to support future dashboard and CI workflows.
 
 ### Design Issues
@@ -770,6 +872,7 @@ MVP success metrics:
 - Public key identity is simple and CLI-native, but account recovery is hard if the private key is lost.
 - If handles are not verified emails, duplicate or misleading handles are possible.
 - Some env vars may appear public, such as feature flags or local service URLs, but storing them in `propagate.yaml` creates inconsistent rules and accidental leakage risk. The MVP should keep all env values out of Git-backed config.
+- AI agents may be able to read local files and terminal output. Propagate can make the safe path obvious, but it cannot guarantee an agent will not misuse access outside Propagate. Sensitive operations still need CLI and server enforcement.
 
 ### Open Questions
 
@@ -787,3 +890,6 @@ MVP success metrics:
 - Should pending joins live indefinitely, or expire after a fixed time?
 - Should the product support verified email handles later, or stay purely key-based?
 - What is the minimum cloud API needed for MVP, and can the cloud service stay stateless for some operations?
+- Which agent instruction targets should be first-class in MVP: generic `AGENTS.md`, Codex skills, Cursor rules, Claude instructions, GitHub Copilot instructions, or a smaller initial set?
+- Should agent guidance be enabled by default during `propagate init`, or only when a known agent configuration is detected?
+- Should AI agents ever receive their own Propagate identities, or should MVP agents always operate through the human user's local identity?

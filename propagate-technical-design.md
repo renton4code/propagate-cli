@@ -56,6 +56,7 @@ The CLI should be organized around small packages with clear boundaries.
 | Config layer | Reads, validates, normalizes, and writes `propagate.yaml` |
 | Git layer | Detects worktree root, checks tracked/ignored files, computes config diff hints |
 | Env layer | Scans candidate env files, parses env files, preserves unrelated local variables, writes updates atomically |
+| Agent guidance layer | Detects agent instruction targets, renders Propagate skills or managed instruction blocks, previews diffs, and writes safe repo-local guidance |
 | Crypto layer | Creates scope keys, encrypts/decrypts env values, encrypts/decrypts member access envelopes, signs API requests |
 | API client | Sends signed HTTPS requests, handles retries, maps API errors into user-facing messages |
 | Domain layer | Shared types for teams, scopes, members, permissions, config revisions, secret versions, and audit summaries |
@@ -70,6 +71,7 @@ Recommended Go libraries:
 | Cryptography | Go standard cryptography packages plus an audited age-compatible library for recipient encryption |
 | HTTPS | Go standard HTTP client with explicit timeout and retry policy |
 | Keychain integration | A cross-platform keyring library, used when local key encryption is enabled |
+| Agent guidance rendering | A small internal template and diff package; avoid shelling out to agent-specific tooling for MVP |
 
 The CLI should expose `--json` for status-style commands and `--dry-run` for commands that would write cloud or local state. The initial implementation can keep JSON output limited to stable status summaries, but command internals should avoid formatting-dependent logic so machine output can grow later.
 
@@ -83,6 +85,7 @@ Propagate stores local user identity and cache data under `~/.propagate`.
 | `~/.propagate/profile` | Handle, default API URL, local preferences | No sensitive secrets, but should still be private |
 | `~/.propagate/cache` | Non-secret cloud metadata cache, such as last seen revisions | No |
 | Project `propagate.yaml` | Team config, scopes, public keys, pending requests | No env values of any kind |
+| Project agent instruction or skill files | Repo-local guidance for AI coding agents | No env values, private keys, decrypted output, or tokens |
 
 Filesystem permissions:
 
@@ -627,13 +630,17 @@ Config writes should preserve comments and ordering where possible. If round-tri
 14. CLI sends a signed setup request to the cloud API.
 15. Edge Function creates the team transactionally and records audit events.
 16. CLI writes `propagate.yaml` with the returned team ID and cloud revision, but without env values.
-17. CLI prints a summary with identity path, created scopes, uploaded variable count, and next Git steps.
+17. CLI detects supported AI agent instruction or skill targets in the repository.
+18. CLI offers to add or update Propagate agent guidance.
+19. If confirmed, CLI writes a managed instruction block or Propagate skill template without env values or private material.
+20. CLI prints a summary with identity path, created scopes, uploaded variable count, agent guidance status, and next Git steps.
 
 Failure handling:
 
 - If cloud setup fails, no config should be written unless it is clearly marked as incomplete.
 - If config writing fails after cloud setup succeeds, the CLI should print recovery instructions and allow `config pull` by team ID if possible.
 - If env import is canceled, no cloud team should be created.
+- If agent guidance writing fails, project setup should remain successful and the CLI should report how to retry the guidance step later.
 
 ### 13.2 Developer Join
 
@@ -794,7 +801,123 @@ Common TUI requirements:
 
 TUI models should be deterministic state machines. They should receive domain data, produce user decisions, and avoid direct database or filesystem writes. The command layer performs side effects after the TUI returns a decision.
 
-## 17. Revision And Conflict Handling
+## 17. AI Agent Integration
+
+Propagate should treat AI coding agents as first-class repository collaborators without treating them as trusted secret readers. The CLI should make the safe path obvious to agents by installing repo-local guidance and exposing predictable, machine-readable command behavior.
+
+### 17.1 Agent Guidance Architecture
+
+The agent guidance layer should have three responsibilities:
+
+| Responsibility | Description |
+| --- | --- |
+| Detect | Find known agent instruction files and skill directories inside the Git worktree |
+| Render | Produce Propagate-specific guidance from internal templates with no env values or private material |
+| Apply | Preview and write managed blocks or skill files idempotently while preserving user-authored content |
+
+Detection should be adapter-based. Each adapter should know how to detect, render, and update one target type without coupling the rest of the CLI to agent-specific file layouts.
+
+Initial adapter targets:
+
+| Target | Behavior |
+| --- | --- |
+| Generic repository instructions | Create or update a managed Propagate section in `AGENTS.md` when selected |
+| Codex-style skill | Create or update a Propagate skill file in the repository's configured skill location when detected or selected |
+| Cursor rules | Update a Propagate-managed rule file when a Cursor rules directory is present |
+| Claude instructions | Update a Propagate-managed section when a Claude instruction file is present |
+| GitHub Copilot instructions | Update a Propagate-managed section when repository Copilot instructions are present |
+
+MVP can ship with generic instructions and one skill adapter first, as long as the adapter interface can support more targets later.
+
+### 17.2 Init Flow
+
+`propagate init` should run agent guidance setup after project config setup. Existing projects should also get the offer when `propagate init` detects an existing `propagate.yaml`.
+
+Flow:
+
+1. Detect agent guidance targets inside the Git worktree.
+2. If no target exists, offer to create generic repository instructions.
+3. If multiple targets exist, show a Bubble Tea selection screen.
+4. For existing files, show a diff preview containing only the managed block changes.
+5. Write selected guidance atomically after user confirmation.
+6. Report which targets were created, updated, skipped, or failed.
+
+Agent guidance setup should be re-runnable and idempotent. A future `propagate agents setup` command can reuse the same implementation, but MVP can expose the flow through `propagate init`.
+
+### 17.3 Managed Block And Skill Rules
+
+Generated guidance should be managed through explicit markers or full-file ownership, depending on the target type.
+
+Managed block rules:
+
+- Preserve all content outside the managed block.
+- Replace only the Propagate-managed block on subsequent runs.
+- Include a template version for future migrations.
+- Avoid rewriting unrelated whitespace or formatting.
+- Refuse to update if managed markers are malformed unless the user confirms a repair.
+
+Skill file rules:
+
+- Prefer a dedicated Propagate skill file over mixing long instructions into unrelated skills.
+- Keep the skill focused on safe Propagate command usage.
+- Do not include project-specific env values, masked values, decrypted output, private key material, or cloud credentials.
+- Include safe command categories, approval requirements, and failure handling guidance.
+- Keep generated text deterministic so diffs are easy to review.
+
+### 17.4 Agent-Friendly Command Contracts
+
+Tool-using agents need command results that are stable enough to parse and safe enough to quote back to users.
+
+Command contract requirements:
+
+| Area | Requirement |
+| --- | --- |
+| JSON output | Status and dry-run commands should expose stable field names and schema versions |
+| Exit codes | Distinguish success, validation failure, permission denied, cloud unavailable, conflict, user cancellation, and internal error |
+| Non-interactive mode | Commands should fail with a clear error instead of waiting forever when confirmation is required and no TTY is available |
+| Dry runs | Write-capable commands should support dry-run summaries without changing local files or cloud state |
+| Output safety | stdout, stderr, JSON, logs, and panic paths must never contain plaintext env values |
+| Operation IDs | Mutating commands should return operation IDs in JSON so agents can report and retry safely |
+| Next steps | Errors should include safe remediation, such as requesting access or asking an admin to approve a pending join |
+
+Agent guidance should recommend discovery commands first: config status, team status, env status, and dry-run variants. It should discourage direct `.env` inspection unless the user explicitly asks and local policy allows it.
+
+### 17.5 Agent Audit Metadata
+
+The CLI may detect agent execution through explicit flags, environment variables, or known adapter contexts. Detection should be best-effort and non-security-critical.
+
+Allowed audit metadata:
+
+- Client kind.
+- Agent adapter name.
+- CLI version.
+- Command name.
+- Operation ID.
+- Config revision.
+
+Disallowed audit metadata:
+
+- User prompts or conversation text.
+- Env values or masked values.
+- Private keys or access tokens.
+- Absolute local paths outside repository-relative env mappings.
+
+Agent metadata should help teams understand whether a change was made from a human terminal, script, or AI-assisted tool, but authorization must still be based on Propagate identity and scope permissions.
+
+### 17.6 Security Boundaries
+
+Agent guidance is guardrail text, not a sandbox. AI agents may have access to the local repository, terminal output, and files the user allows them to inspect.
+
+Security rules:
+
+- The CLI and cloud API must enforce permissions regardless of agent guidance.
+- Generated guidance must never grant access, create identities, or approve joins by itself.
+- Agent-driven commands use the current user's local Propagate identity unless a future explicit agent identity model is added.
+- Sensitive commands should require human confirmation unless the user intentionally passes an explicit non-interactive approval flag.
+- Agent templates should instruct agents not to paste decrypted env values into chat, docs, tests, commit messages, or issue trackers.
+- Audit events should identify agent-assisted execution when known, but should not treat it as a separate trusted identity in MVP.
+
+## 18. Revision And Conflict Handling
 
 Propagate has two important revision systems:
 
@@ -807,9 +930,9 @@ Env push should include expected current secret version IDs for changed or remov
 
 This prevents accidental overwrites without requiring pessimistic locks.
 
-## 18. Security Requirements
+## 19. Security Requirements
 
-### 18.1 Plaintext Handling
+### 19.1 Plaintext Handling
 
 The CLI should treat plaintext env values as sensitive.
 
@@ -819,6 +942,8 @@ Rules:
 - Do not include plaintext values in errors.
 - Do not include plaintext values in analytics or audit metadata.
 - Do not write env values to `propagate.yaml`, including public, placeholder, default, example, or masked values.
+- Do not write env values to generated agent instructions, skills, prompts, tool logs, or machine-readable output.
+- Do not include private key material, access tokens, cloud credentials, prompt text, or conversation text in generated agent guidance or audit metadata.
 - Mask values in all TUI and terminal output.
 - Keep plaintext in memory only as long as needed.
 - Avoid writing temporary plaintext files.
@@ -826,7 +951,7 @@ Rules:
 
 Go cannot guarantee immediate memory zeroization for all strings. The implementation should still minimize copies and use byte slices for sensitive crypto operations where practical.
 
-### 18.2 Cloud Trust Boundary
+### 19.2 Cloud Trust Boundary
 
 In end-to-end encryption mode, Supabase is trusted for availability, metadata storage, authorization checks, and audit history. It is not trusted with plaintext env values or plaintext scope keys.
 
@@ -849,7 +974,7 @@ It should not expose:
 
 This threat model should be stated in user-facing security documentation.
 
-### 18.3 Server-Side Authorization
+### 19.3 Server-Side Authorization
 
 Server authorization must not rely on client-provided role claims. The server derives roles and permissions from the database.
 
@@ -862,7 +987,7 @@ Every API handler should verify:
 - Required permission for the specific scope and operation.
 - Expected revision or version preconditions for writes.
 
-### 18.4 Admin Approval Safety
+### 19.4 Admin Approval Safety
 
 Admin approval is security-critical.
 
@@ -877,7 +1002,7 @@ The Config Push TUI should show:
 
 The CLI should encourage admins to review the Git diff before approving. It should not auto-approve pending joins.
 
-### 18.5 Revocation Limits
+### 19.5 Revocation Limits
 
 Revocation cannot erase values already pulled to a developer's machine. The CLI and docs should say this plainly.
 
@@ -888,7 +1013,7 @@ After revoking access, the product should recommend:
 - Re-encrypt current values only for remaining authorized members.
 - Commit the updated config after config push.
 
-### 18.6 Production Scope Guardrails
+### 19.6 Production Scope Guardrails
 
 `prod` should be treated as high-risk.
 
@@ -900,7 +1025,7 @@ Guardrails:
 - Refuse non-interactive prod writes unless an explicit flag or config setting is present.
 - Prefer admin-only write access by default.
 
-## 19. Edge Cases And Expected Behavior
+## 20. Edge Cases And Expected Behavior
 
 | Edge Case | Expected Behavior |
 | --- | --- |
@@ -927,8 +1052,12 @@ Guardrails:
 | Replay attempt | Server rejects reused nonce and records security-relevant audit metadata |
 | Admin cannot decrypt scope key | Config approval for that scope fails; admin must pull access or recover key |
 | Supabase transaction partially fails | Transaction rolls back; CLI retry uses same operation ID |
+| Agent instruction file has malformed managed block | CLI refuses automatic update and offers a repair or manual instructions |
+| Multiple agent systems detected | CLI lets the user choose targets and reports each created, updated, skipped, or failed target |
+| Non-interactive agent invokes mutating command without approval | CLI fails with a stable exit code and suggests dry-run or explicit human-approved mode |
+| Agent guidance write fails | Propagate project setup remains valid; CLI reports the failed target and retry path |
 
-## 20. Observability And Auditing
+## 21. Observability And Auditing
 
 The product needs auditability without leaking secrets.
 
@@ -951,6 +1080,8 @@ Audit metadata should include:
 - Env file path.
 - Config revision.
 - CLI version.
+- Client kind, such as human terminal, script, or AI agent when known.
+- Agent adapter name when known and safe.
 - Operation ID.
 - Counts of variables added, changed, removed, or pulled.
 
@@ -959,9 +1090,10 @@ Audit metadata should not include:
 - Plaintext values.
 - Masked values if the mask might leak too much for short secrets.
 - Raw hashes of plaintext values.
+- Prompt text or conversation content.
 - Local filesystem absolute paths beyond the repository-relative env file mapping.
 
-## 21. Testing Strategy
+## 22. Testing Strategy
 
 Testing should cover both product behavior and security invariants.
 
@@ -976,11 +1108,13 @@ Recommended coverage:
 | TUI decisions | Approval, decline, skip, cancel, selection state, masked values |
 | API authorization | Read/write/admin permissions, revoked members, replay rejection, revision preconditions |
 | Supabase transactions | Config push atomicity, env push conflicts, idempotent retries |
+| Agent guidance | Target detection, managed block replacement, idempotent reruns, malformed marker handling, no env value leakage |
+| Agent command contracts | JSON schema stability, exit codes, non-interactive failure, dry-run summaries |
 | End-to-end flows | First setup, join request, admin approval, env pull, env push, revoke access |
 
 Security-specific tests should assert that plaintext env values never appear in logs, command output, audit rows, config snapshots, `propagate.yaml`, or API error bodies. This applies to public and placeholder env values as well as secrets.
 
-## 22. Deployment And Operations
+## 23. Deployment And Operations
 
 Supabase should be managed with migrations committed to the repository. Each schema change should have a forward migration and a rollback strategy where practical.
 
@@ -994,7 +1128,7 @@ Operational recommendations:
 - Monitor Edge Function errors, database transaction failures, and authorization failure rates.
 - Version API responses so older CLIs can fail gracefully when the server requires an upgrade.
 
-## 23. MVP Implementation Phases
+## 24. MVP Implementation Phases
 
 ### Phase 1: Local Foundations
 
@@ -1004,6 +1138,7 @@ Operational recommendations:
 - Git worktree detection.
 - Env scanner and parser.
 - Basic masked output helpers.
+- Agent guidance target detection and template rendering.
 
 ### Phase 2: Cryptography
 
@@ -1037,6 +1172,7 @@ Operational recommendations:
 - Env import TUI.
 - Env push TUI.
 - Config push TUI.
+- Agent guidance target selection and diff preview.
 - Prod guardrails.
 - Clear summaries and error messages.
 - JSON and dry-run support for selected commands.
@@ -1045,11 +1181,12 @@ Operational recommendations:
 
 - End-to-end test suite.
 - Security tests for no plaintext leakage.
+- Agent guidance security tests for no env values, private keys, tokens, prompts, or conversations in generated files or audit metadata.
 - Conflict handling polish.
 - Cross-platform filesystem behavior.
 - Documentation for recovery, revocation, and team workflows.
 
-## 24. Open Technical Decisions
+## 25. Open Technical Decisions
 
 The PRD leaves several decisions open. Recommended MVP answers:
 
@@ -1064,8 +1201,11 @@ The PRD leaves several decisions open. Recommended MVP answers:
 | Pull overwrite behavior | Prompt before overwriting existing differing values; non-interactive mode preserves unless explicitly told to overwrite |
 | Removed variables during pull | Preserve locally by default and warn; deletion requires explicit confirmation |
 | Revocation rotation | Record revocation in MVP; add guided or automated scope key rotation as soon as practical |
+| Agent guidance targets | Support generic `AGENTS.md` and one Propagate skill adapter first; add Cursor, Claude, and Copilot adapters after the interface settles |
+| Agent identity model | AI agents operate through the current human user's local identity in MVP; dedicated AI agent identities are later work |
+| Agent guidance default | Offer setup during `propagate init`; auto-select detected targets but require confirmation before writing |
 
-## 25. Summary
+## 26. Summary
 
 The safest MVP architecture is a Go CLI that performs all encryption locally, a Bubble Tea TUI for high-risk human decisions, Supabase Edge Functions as the signed API boundary, and Supabase Postgres as the encrypted metadata and audit store.
 
