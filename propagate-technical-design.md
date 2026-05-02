@@ -11,7 +11,9 @@ The MVP implementation choices are:
 - CLI: Go
 - TUI: Bubble Tea ecosystem
 - Database: Supabase Postgres
-- Cloud API: Supabase Edge Functions in front of Supabase Postgres
+- Cloud API: Go HTTPS API deployed on Google Cloud Run
+- Infrastructure: Terraform for Google Cloud and Supabase project resources
+- Database changes: versioned SQL migrations for schema, indexes, policies, and stored functions
 - Secret model: end-to-end encrypted values, encrypted locally before upload
 - Team configuration: Git-backed `propagate.yaml` that never stores env values
 
@@ -31,16 +33,17 @@ Key principles:
 
 ## 3. High-Level Architecture
 
-Propagate has four major components.
+Propagate has five major components.
 
 | Component | Responsibility |
 | --- | --- |
 | Go CLI | Command routing, local identity management, Git/config discovery, env file parsing, encryption/decryption, cloud API calls, non-interactive output |
 | Bubble Tea TUI | Interactive setup, env import review, env push confirmation, config approval decisions |
-| Supabase Edge Functions | HTTPS API, request signature verification, authorization checks, transaction orchestration, audit recording |
+| Go Cloud Run API | HTTPS API, request signature verification, authorization checks, transaction orchestration, audit recording |
 | Supabase Postgres | Persistent team metadata, config revisions, encrypted secret records, encrypted key envelopes, audit events, pull/update history |
+| Terraform and migrations | Provision Google Cloud/Supabase infrastructure and apply versioned database changes |
 
-The CLI must not connect to Supabase Postgres with privileged credentials. Shipping a Supabase service role key inside a desktop CLI would compromise the entire system. Instead, the CLI calls Edge Functions over HTTPS. Edge Functions verify signed requests from Propagate identities and perform database operations using server-side credentials.
+The CLI must not connect to Supabase Postgres with privileged credentials. Shipping a Supabase service role key or database password inside a desktop CLI would compromise the entire system. Instead, the CLI calls the Go API on Cloud Run over HTTPS. The Cloud Run API verifies signed requests from Propagate identities and performs database operations using server-side credentials stored outside the CLI.
 
 The Supabase database stores ciphertext and metadata. The cloud can enforce authorization decisions and retain audit events, but it cannot decrypt secrets in end-to-end encryption mode.
 
@@ -183,11 +186,13 @@ The signed request should include:
 - Public key SHA
 - CLI version
 
-The Edge Function validates the signature, rejects stale timestamps, rejects replayed nonces, loads the member record for the public key SHA, and evaluates permissions before touching team data.
+The Go Cloud Run API validates the signature, rejects stale timestamps, rejects replayed nonces, loads the member record for the public key SHA, and evaluates permissions before touching team data.
 
 ## 8. Cloud API Design
 
-The CLI talks to a small HTTPS API implemented as Supabase Edge Functions. The API should be coarse-grained around product workflows rather than exposing raw database tables.
+The CLI talks to a small HTTPS API implemented as a Go service deployed on Google Cloud Run. The API should be coarse-grained around product workflows rather than exposing raw database tables.
+
+Cloud Run is the signed API boundary. Supabase Postgres is the data store and transactional logic layer. The Go API owns HTTP routing, request canonicalization, signature verification, replay protection orchestration, API versioning, request/response schemas, and user-facing error mapping. Postgres stored functions own data-local transactions and invariants.
 
 Recommended endpoints by responsibility:
 
@@ -201,6 +206,38 @@ Recommended endpoints by responsibility:
 | Audit | Record pull, push, config, access, and error-relevant events |
 
 The API must be idempotent where possible. Client-supplied operation IDs should be used for setup, config push, and env push so retries do not duplicate audit events or create duplicate versions.
+
+### 8.1 Go API Structure
+
+The Cloud Run API should be a single Go service for the MVP.
+
+| Area | Responsibility |
+| --- | --- |
+| HTTP layer | Route product endpoints, decode requests, encode responses, enforce API version headers |
+| Signature middleware | Canonicalize requests, verify Ed25519 signatures, validate timestamps and body digests |
+| Replay middleware | Reserve request nonces through Postgres and reject duplicate signed requests |
+| Auth context layer | Resolve team, actor, role, scope, and effective permissions |
+| Handler layer | Implement team setup, config sync, secret read, secret write, and audit workflows |
+| Database layer | Call stored functions and map database errors to stable API errors |
+| Observability layer | Structured logs, safe metrics, request IDs, operation IDs, and error categories |
+| Configuration layer | Load environment-specific settings and secrets from Cloud Run environment variables or Secret Manager |
+
+The Go API should avoid duplicating CLI crypto logic except for request signature verification. It must never decrypt env values or plaintext scope keys.
+
+### 8.2 Cloud Run Runtime Configuration
+
+Cloud Run should be configured for low-cost, low-maintenance MVP hosting.
+
+Recommended defaults:
+
+- Request-based billing.
+- Minimum instances set to zero.
+- Conservative maximum instance count to protect database connection limits and free-tier spend.
+- Small memory and CPU allocation initially, with load testing before increasing.
+- Container concurrency high enough to amortize cold starts, but low enough to keep Postgres connections bounded.
+- No direct public database access from clients.
+- Service account with only the permissions required to read runtime secrets and emit logs.
+- Database connection string and service credentials stored in Secret Manager or Cloud Run secrets, not Terraform plaintext outputs.
 
 ## 9. Supabase Database Schema
 
@@ -461,11 +498,11 @@ Permission behavior:
 
 The client should also perform local permission checks for early, friendly errors. The server remains authoritative.
 
-## 11. Supabase Stored Functions
+## 11. Supabase Postgres Stored Functions
 
-Supabase Edge Functions remain the public HTTPS boundary, but selected data-local logic should live in Postgres stored functions for performance, consistency, and transactional safety.
+The Go Cloud Run API is the public HTTPS boundary, but selected data-local logic should live in Supabase Postgres stored functions for performance, consistency, and transactional safety.
 
-Stored functions should not expose raw tables directly to the CLI. Edge Functions should call them after request parsing and signature verification.
+Stored functions should not expose raw tables directly to the CLI. The Go API should call them after request parsing and signature verification.
 
 ### 11.1 Responsibilities That Belong In Stored Functions
 
@@ -484,8 +521,8 @@ Stored functions should not expose raw tables directly to the CLI. Edge Function
 
 | Logic | Where It Belongs | Why |
 | --- | --- | --- |
-| Request canonicalization | Edge Function | It is protocol logic and should be easy to version with the API |
-| Signature verification | Edge Function | Ed25519 verification and timestamp checks are easier to implement safely in the API runtime |
+| Request canonicalization | Go Cloud Run API | It is protocol logic and should be easy to version with the API |
+| Signature verification | Go Cloud Run API | Ed25519 verification and timestamp checks are easier to implement safely in Go and can share request-signing fixtures with the CLI |
 | Encryption and decryption | CLI | The database must never see plaintext env values or plaintext scope keys |
 | Scope key envelope creation | CLI | Admin clients encrypt scope keys for recipients in the end-to-end encryption model |
 | YAML parsing and validation | CLI, with server-side metadata validation | Git config is local file state; server should only validate normalized metadata snapshots |
@@ -511,7 +548,7 @@ Recommended functions:
 | Record pull event | Append pull audit metadata after the CLI successfully receives the encrypted payload |
 | Fetch team status | Return member list, pending/recent access metadata, and audit summaries |
 
-The Edge Function should still enforce the public API contract. Stored functions should enforce data invariants and transaction semantics.
+The Go API should still enforce the public API contract. Stored functions should enforce data invariants and transaction semantics.
 
 ### 11.4 Performance And Indexing
 
@@ -575,7 +612,7 @@ Stored functions are part of the trusted backend, not a public client API.
 Security rules:
 
 - The CLI should never call stored functions directly.
-- Edge Functions should verify request signatures before invoking stored functions.
+- The Go API should verify request signatures before invoking stored functions.
 - Stored functions should derive roles and permissions from database state, not from client-provided claims.
 - Functions that need elevated privileges should use tightly scoped execution privileges and a fixed search path.
 - Function inputs should use team IDs, public key SHAs, scope IDs, operation IDs, ciphertext, envelopes, and metadata only.
@@ -628,7 +665,7 @@ Config writes should preserve comments and ordering where possible. If round-tri
 12. CLI encrypts selected env values locally.
 13. CLI creates first admin scope key envelopes.
 14. CLI sends a signed setup request to the cloud API.
-15. Edge Function creates the team transactionally and records audit events.
+15. Go API calls stored functions that create the team transactionally and record audit events.
 16. CLI writes `propagate.yaml` with the returned team ID and cloud revision, but without env values.
 17. CLI detects supported AI agent instruction or skill targets in the repository.
 18. CLI offers to add or update Propagate agent guidance.
@@ -667,7 +704,7 @@ The cloud does not need to know about the request until an admin pushes the appr
 9. For approvals, CLI prepares updated config metadata.
 10. For approved scope access, CLI decrypts the relevant scope key and encrypts a new envelope for the target member.
 11. CLI sends a signed config push with expected cloud revision, decisions, updated config snapshot, and new envelopes.
-12. Edge Function validates admin permission and applies the transaction.
+12. Go API validates admin permission and applies the transaction through stored functions.
 13. CLI updates `propagate.yaml` to reflect approved and declined decisions while leaving skipped items pending.
 14. CLI prints a decision summary and whether the config file changed.
 
@@ -716,7 +753,7 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 9. CLI confirms server-side write access before upload.
 10. CLI encrypts approved new values locally.
 11. CLI sends encrypted upserts and tombstones with expected current versions.
-12. Edge Function validates write permission and version preconditions.
+12. Go API validates write permission and version preconditions through stored functions.
 13. Database transaction creates immutable secret versions, updates current pointers, and records audit events.
 14. CLI prints a masked summary.
 
@@ -1116,17 +1153,40 @@ Security-specific tests should assert that plaintext env values never appear in 
 
 ## 23. Deployment And Operations
 
-Supabase should be managed with migrations committed to the repository. Each schema change should have a forward migration and a rollback strategy where practical.
+Infrastructure should be managed with Terraform, while database schema and stored function changes should be managed with versioned SQL migrations committed to the repository.
+
+Terraform responsibilities:
+
+- Google Cloud project service enablement needed for Cloud Run, Artifact Registry, Secret Manager, IAM, logging, and builds.
+- Artifact Registry repository for the Go API container image.
+- Cloud Run service, service account, IAM bindings, environment variables, secret mounts, scaling limits, CPU, memory, and concurrency.
+- Secret Manager secret containers for API runtime configuration, without committing secret values to source control.
+- Budget alerts and basic operational guardrails.
+- Supabase project resources and settings where the Supabase Terraform provider supports them.
+
+Migration responsibilities:
+
+- Supabase Postgres tables, indexes, constraints, and enum-like checks.
+- Stored functions for replay nonce reservation, permission resolution, config push, env pull bundle fetch, env push, and audit summaries.
+- Row-level security policies if direct Supabase access is ever introduced for internal tooling.
+- Safe forward migrations and rollback notes where practical.
+
+Terraform should not be the primary mechanism for routine database schema changes. Database migrations are easier to review, test, apply in order, and roll back independently from infrastructure changes.
 
 Operational recommendations:
 
-- Separate development, staging, and production Supabase projects.
-- Keep service role keys only in Supabase Edge Function secrets or deployment environment variables.
+- Separate development, staging, and production Google Cloud and Supabase environments.
+- Keep Supabase service role keys and database credentials only in Secret Manager or Cloud Run secret bindings.
 - Enable database backups and point-in-time recovery for production.
 - Use database constraints to reinforce application invariants.
 - Use scheduled cleanup for expired request nonces.
-- Monitor Edge Function errors, database transaction failures, and authorization failure rates.
+- Monitor Cloud Run request latency, cold starts, error rates, database transaction failures, and authorization failure rates.
 - Version API responses so older CLIs can fail gracefully when the server requires an upgrade.
+- Keep Cloud Run minimum instances at zero for low-cost MVP environments unless latency requirements justify paying for warm instances.
+- Cap Cloud Run maximum instances initially to protect Supabase connection limits and control spend.
+- Use a bounded database connection pool in the Go API.
+- Run migrations from CI/CD or an explicit release command before deploying API code that depends on them.
+- Keep Terraform state out of the repository and avoid storing plaintext secrets in Terraform variables or outputs.
 
 ## 24. MVP Implementation Phases
 
@@ -1150,8 +1210,9 @@ Operational recommendations:
 
 ### Phase 3: Cloud Backend
 
-- Supabase migrations.
-- Edge Functions for team setup, config sync, secret read, secret write, and audit events.
+- Terraform for Google Cloud, Cloud Run, Artifact Registry, Secret Manager, IAM, and Supabase project resources.
+- Supabase Postgres SQL migrations for schema, indexes, policies, and stored functions.
+- Go Cloud Run API for team setup, config sync, secret read, secret write, and audit events.
 - Transaction and idempotency handling.
 - Permission enforcement.
 
@@ -1193,6 +1254,8 @@ The PRD leaves several decisions open. Recommended MVP answers:
 | Question | Recommendation |
 | --- | --- |
 | `propagate.yaml` or `propagate.yml` | Use `propagate.yaml` as canonical; detect `propagate.yml` and suggest rename |
+| Backend API stack | Use a Go HTTPS API on Google Cloud Run, not Supabase Edge Functions, so CLI and backend can share Go domain and signing code |
+| Infrastructure management | Use Terraform for infrastructure and SQL migrations for database schema/stored functions |
 | Require Git repository | Yes for MVP, because access review depends on Git workflow |
 | SSH key or dedicated key format | Use a dedicated Propagate identity bundle with Ed25519 signing and X25519 or age encryption keys; display it as one identity |
 | First admin | The user who successfully creates the team during `propagate init` becomes first admin |
@@ -1207,7 +1270,7 @@ The PRD leaves several decisions open. Recommended MVP answers:
 
 ## 26. Summary
 
-The safest MVP architecture is a Go CLI that performs all encryption locally, a Bubble Tea TUI for high-risk human decisions, Supabase Edge Functions as the signed API boundary, and Supabase Postgres as the encrypted metadata and audit store.
+The safest MVP architecture is a Go CLI that performs all encryption locally, a Bubble Tea TUI for high-risk human decisions, a Go API on Google Cloud Run as the signed API boundary, and Supabase Postgres as the encrypted metadata and audit store.
 
 The most important implementation detail is preserving the end-to-end encryption boundary: Supabase can store and authorize access to encrypted material, but only local Propagate clients with valid private keys can decrypt scope keys and env values.
 

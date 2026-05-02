@@ -6,6 +6,14 @@ Propagate is a CLI-first tool for sharing environment variables across developme
 
 The initial product focuses on developer teams using `.env` files. Future releases may add runtime injection, CI support, production agents, and hosted dashboard workflows.
 
+MVP implementation stack:
+
+- CLI: Go with Bubble Tea for interactive flows.
+- Backend API: Go HTTPS service deployed on Google Cloud Run.
+- Database: Supabase Postgres.
+- Infrastructure: Terraform for cloud resources.
+- Database changes: versioned SQL migrations for schema, indexes, policies, and stored functions.
+
 ## 2. Product Goals
 
 - Make team `.env` sharing safer than sending files through Slack, email, or docs.
