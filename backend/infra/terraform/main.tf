@@ -85,12 +85,16 @@ resource "google_secret_manager_secret" "runtime" {
 }
 
 resource "google_secret_manager_secret_iam_member" "api_secret_access" {
-  for_each = google_secret_manager_secret.runtime
+  for_each = local.secret_ids
 
-  project   = each.value.project
-  secret_id = each.value.secret_id
+  project   = var.project_id
+  secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.api.email}"
+
+  depends_on = [
+    google_secret_manager_secret.runtime,
+  ]
 }
 
 resource "google_cloud_run_v2_service" "api" {
