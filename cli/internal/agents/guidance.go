@@ -1,0 +1,99 @@
+package agents
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"propagate/cli/internal/atomicfile"
+)
+
+const (
+	FileName = "AGENTS.md"
+	begin    = "<!-- BEGIN PROPAGATE MANAGED BLOCK v1 -->"
+	end      = "<!-- END PROPAGATE MANAGED BLOCK v1 -->"
+)
+
+type Result struct {
+	Status string `json:"status"`
+	Path   string `json:"path,omitempty"`
+}
+
+func ApplyGeneric(root string) (Result, error) {
+	path := filepath.Join(root, FileName)
+	block := RenderBlock()
+
+	exists, err := atomicfile.Exists(path)
+	if err != nil {
+		return Result{}, err
+	}
+	if !exists {
+		if err := atomicfile.Write(path, []byte(block), 0o644); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: "created", Path: path}, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Result{}, err
+	}
+	next, changed, err := upsertBlock(data, []byte(block))
+	if err != nil {
+		return Result{}, err
+	}
+	if !changed {
+		return Result{Status: "unchanged", Path: path}, nil
+	}
+	if err := atomicfile.Write(path, next, 0o644); err != nil {
+		return Result{}, err
+	}
+	return Result{Status: "updated", Path: path}, nil
+}
+
+func RenderBlock() string {
+	return strings.Join([]string{
+		begin,
+		"### Propagate Environment Handling",
+		"",
+		"Template: propagate-agent-guidance-v1",
+		"",
+		"- Use Propagate CLI commands instead of reading, copying, inventing, or committing env values.",
+		"- Treat all env values as confidential, including values that look public or local-only.",
+		"- Never write env values to `propagate.yaml`, docs, prompts, tests, fixtures, commits, or agent instructions.",
+		"- Prefer `propagate config status`, `propagate team status`, and `propagate env status` for discovery.",
+		"- Prefer `--json` for machine-readable status output and `--dry-run` before write-capable commands.",
+		"- Ask for human confirmation before running `propagate env pull`, `propagate env push`, `propagate env set`, or `propagate config push`.",
+		"- Report permission errors and pending join requirements clearly instead of attempting workarounds.",
+		end,
+		"",
+	}, "\n")
+}
+
+func upsertBlock(data, block []byte) ([]byte, bool, error) {
+	beginBytes := []byte(begin)
+	endBytes := []byte(end)
+	beginIndex := bytes.Index(data, beginBytes)
+	endIndex := bytes.Index(data, endBytes)
+	if (beginIndex == -1) != (endIndex == -1) {
+		return nil, false, fmt.Errorf("%s has malformed Propagate managed block markers", FileName)
+	}
+	if beginIndex == -1 {
+		next := append(bytes.TrimRight(data, "\n"), '\n', '\n')
+		next = append(next, block...)
+		return next, true, nil
+	}
+	endIndex += len(endBytes)
+	for endIndex < len(data) && (data[endIndex] == '\r' || data[endIndex] == '\n') {
+		endIndex++
+	}
+	next := append([]byte{}, data[:beginIndex]...)
+	next = append(next, block...)
+	next = append(next, data[endIndex:]...)
+	if bytes.Equal(next, data) {
+		return data, false, nil
+	}
+	return next, true, nil
+}

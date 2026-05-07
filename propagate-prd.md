@@ -88,9 +88,9 @@ Each scope has:
 
 The project config file is `propagate.yaml`.
 
-It is committed to Git and contains non-secret project/team metadata, member public keys, pending requests, scopes, and env file mappings.
+It is committed to Git and contains project/team metadata, member public keys, pending requests, scopes, env file mappings, and variable declarations.
 
-It must never contain environment variable values of any kind. This includes secrets, public values, placeholder values, defaults, masked values, and example values. The config may contain variable names and env file mappings, but values belong only in local env files and encrypted cloud records.
+Each variable declaration records the env file path, variable name, sensitivity, and a safe representation of the current value. Variables are `sensitive` by default and must be represented by a keyed digest such as `hmac-sha-256:v1:...`; raw SHA-256 is not acceptable because low-entropy secrets can be cracked offline. A variable may be explicitly marked `non_sensitive`. Non-sensitive values may be stored directly only when they fit on one short line; otherwise the config stores a short preview such as `aaa...zzz` plus the keyed digest.
 
 ## 5. User Roles
 
@@ -104,6 +104,7 @@ Admins can:
 - Push local config state to the cloud.
 - Pull cloud config state.
 - Push environment variable updates for scopes they can write.
+- Set individual environment variable values for scopes they can write.
 - View team status and last pull events.
 
 ### 5.2 Developer
@@ -114,7 +115,7 @@ Developers can:
 - Request to join a project team.
 - Pull environment variables for scopes they can read.
 - Request access changes through config diffs.
-- Push environment variable changes only for scopes they can write.
+- Push environment variable changes and set individual values only for scopes they can write.
 
 ### 5.3 Future Roles
 
@@ -162,7 +163,8 @@ Initializes the local user identity and, if the repo is not already configured, 
    - Let the user assign each variable to `dev`, `staging`, `prod`, or a custom scope.
    - Encrypt values locally for the selected scope.
    - Store encrypted secrets in the cloud.
-   - Save team config to `propagate.yaml` without writing any env values to the config.
+   - Save team config to `propagate.yaml` with env file mappings and variable declarations.
+   - Mark discovered variables as sensitive by default and write keyed `hmac-sha-256:v1:` digests, not plaintext values.
 7. Offer to add or update AI agent guidance for the repository:
    - Detect known agent instruction and skill locations.
    - Explain that this creates agent-facing instructions only, not secret access.
@@ -374,8 +376,9 @@ Default scope is inferred from config or defaults to `dev`.
 7. Ask user to confirm updates.
 8. Check whether the user has write access to the scope.
 9. Encrypt new values locally.
-10. Upload encrypted values to the cloud.
-11. Record update event.
+10. Update the scope's variable declarations in `propagate.yaml`.
+11. Upload encrypted values and the updated metadata snapshot to the cloud.
+12. Record update event.
 
 #### Access Errors
 
@@ -386,17 +389,73 @@ If the user lacks write access, the CLI should:
 - Refuse the push before upload.
 - Suggest requesting a role or scope change.
 
-### 6.8 `propagate env status`
+### 6.8 `propagate env set`
 
-Shows masked values currently stored in the cloud.
+Sets or updates one environment variable value in the encrypted cloud store.
+
+#### Usage
+
+```bash
+propagate env set API_TOKEN --scope dev
+propagate env set DATABASE_URL --scope staging
+```
+
+The value must not be passed as a positional CLI argument. The CLI should prompt for the value using a secure no-echo prompt.
+
+Default scope is inferred from config or defaults to `dev`.
+
+#### Behavior
+
+1. Read `propagate.yaml`.
+2. Determine the target scope and env file mapping.
+3. Prompt securely for the new value without echoing it.
+4. Ask for confirmation when setting a `prod` value.
+5. Fetch current encrypted cloud values and the user's scope envelope.
+6. Decrypt the scope key locally.
+7. Determine whether the variable is added or changed.
+8. Check whether the user has write access to the scope.
+9. Encrypt the new value locally.
+10. Update the variable declaration in `propagate.yaml`.
+11. Upload a single encrypted value update and updated metadata snapshot through the same cloud path as `propagate env push`.
+12. Record update event.
+13. Do not update local env files unless a future explicit flag requests it.
+
+#### Output Requirements
+
+The command output must show:
+
+- Scope.
+- Variable name.
+- Whether the value was added or changed.
+- Current identity.
+- Operation ID, when available.
+
+The command output must never show the plaintext value.
+
+#### Access Errors
+
+If the user lacks write access, the CLI should:
+
+- Show the scope.
+- Show the current identity.
+- Refuse before upload.
+- Suggest requesting a role or scope change.
+
+### 6.9 `propagate env status`
+
+Shows masked values currently stored in the cloud and compares local env files against the latest cloud `propagate.yaml` declarations.
 
 #### Behavior
 
 1. Read selected scope or default to `dev`.
 2. Check read access.
-3. Fetch and decrypt current cloud values.
-4. Display variable names and masked values.
-5. Show last updated metadata if available.
+3. Fetch the latest cloud config snapshot.
+4. Fetch and decrypt current cloud values.
+5. Hash local env file values with the same scope-keyed digest algorithm used by the cloud declarations.
+6. Compare local values against the latest cloud declarations.
+7. Display variable names, masked cloud values, local state, and last updated metadata.
+8. Suggest `propagate config pull` if local YAML is stale.
+9. Suggest `propagate env pull` if local values are missing or differ from the latest cloud declarations.
 
 #### Example Output
 
@@ -410,7 +469,7 @@ STRIPE_KEY=s***********x
 Last updated: 2026-04-30 10:24 by alice@example.com
 ```
 
-### 6.9 `propagate team status`
+### 6.10 `propagate team status`
 
 Shows team membership, pending requests, access changes, and pull activity.
 
@@ -516,12 +575,13 @@ The MVP should not require every ecosystem to be supported perfectly. It should 
 The generated guidance should tell agents:
 
 - Use Propagate commands instead of reading, copying, or inventing env values.
-- Treat all env values as confidential, including public-looking values.
-- Never write env values to `propagate.yaml`, agent instructions, docs, prompts, test fixtures, or commits.
+- Treat variables as sensitive by default, including public-looking values, unless a human explicitly marks them `non_sensitive`.
+- Never write sensitive plaintext values or raw plaintext hashes to `propagate.yaml`, agent instructions, docs, prompts, test fixtures, or commits.
+- Never write any env values into generated agent instructions, prompts, or tool logs.
 - Prefer `propagate config status`, `propagate team status`, and `propagate env status` for discovery.
 - Prefer `--json` for machine-readable status output.
 - Prefer `--dry-run` before any command that writes local files or cloud state.
-- Require human confirmation before running `propagate env pull`, `propagate env push`, or `propagate config push`.
+- Require human confirmation before running `propagate env pull`, `propagate env push`, `propagate env set`, or `propagate config push`.
 - Report permission errors and pending join requirements clearly instead of attempting workarounds.
 
 Agent guidance is not an access-control system. Agents operate with the user's local filesystem and identity. Propagate must still enforce permissions in the CLI and cloud API.
@@ -594,6 +654,15 @@ scopes:
   dev:
     env_files:
       - .env
+    variables:
+      - name: DATABASE_URL
+        env_file_path: .env
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:3YV..."
+      - name: PUBLIC_BASE_URL
+        env_file_path: .env
+        sensitivity: non_sensitive
+        literal: "https://api.example.com"
     default_role_access:
       developers: read
       admins: write
@@ -648,10 +717,10 @@ Cloud stores:
 Cloud does not store:
 
 - User private keys.
-- Plaintext env values.
+- Sensitive plaintext env values.
 - Plaintext scope keys, if using end-to-end encryption.
 
-`propagate.yaml` also does not store plaintext env values, even when a value is considered public or non-secret. Treating all env values as config-external prevents accidental leakage and keeps the Git-reviewed file metadata-only.
+`propagate.yaml` stores sensitive values only as scope-keyed digest declarations. Explicitly non-sensitive values may appear as direct short literals or truncated previews. The cloud stores the same metadata snapshot plus encrypted secret versions; it never stores plaintext sensitive values or plaintext scope keys.
 
 ### 10.2 Secret Storage Model
 
@@ -709,7 +778,7 @@ Access is evaluated by:
 Expected behavior:
 
 - `read`: can pull and view env status.
-- `write`: can read and push env changes.
+- `write`: can read, push env changes, and set individual env values.
 - `admin`: can manage config, approve joins, approve role changes, and write all scopes unless restricted later.
 
 ## 12. Monorepo Support
@@ -753,8 +822,11 @@ Recommended defaults:
 
 ## 13. Security Requirements
 
-- Never write env values to `propagate.yaml`, including public, non-secret, placeholder, masked, or example values.
-- Never upload plaintext env values to cloud when end-to-end encryption mode is enabled.
+- Never write sensitive env values to `propagate.yaml`.
+- Use scope-keyed digest declarations with an algorithm prefix, for example `hmac-sha-256:v1:...`; never use raw plaintext hashes for sensitive values.
+- Only write direct values to `propagate.yaml` when a variable is explicitly marked `non_sensitive` and the value fits on one short line. Long non-sensitive values must be truncated as a preview such as `aaa...zzz`.
+- Never upload sensitive plaintext env values to cloud when end-to-end encryption mode is enabled.
+- Never accept plaintext env values as positional CLI arguments; single-value updates must use secure no-echo prompting or an explicit non-echo input channel.
 - Store private keys under `~/.propagate` with restrictive filesystem permissions.
 - Warn if `.env` files are tracked by Git.
 - Warn before writing `prod` env values to a local `.env` file.
@@ -830,6 +902,7 @@ MVP success metrics:
 - `propagate config status`.
 - `propagate env pull`.
 - `propagate env push`.
+- `propagate env set`.
 - `propagate env status`.
 - `propagate team status`.
 - Basic TUI flows.
@@ -865,7 +938,7 @@ MVP success metrics:
 - Treat `propagate env pull` as the compatibility path for MVP, but design the data model so `propagate run` can be added cleanly later.
 - Add automatic `.gitignore` checks for managed env files.
 - Treat every env value as confidential for storage purposes, even when a user describes it as public.
-- Add a `--dry-run` option to `env push`, `env pull`, and `config push`.
+- Add a `--dry-run` option to `env push`, `env set`, `env pull`, and `config push`.
 - Add a `--json` output mode for status commands so future CI and scripts can consume them.
 - Add an agent guidance installer to `propagate init` and make it re-runnable without changing unrelated instruction content.
 - Store enough audit metadata now to support future dashboard and CI workflows.
@@ -879,7 +952,7 @@ MVP success metrics:
 - Monorepo env discovery can produce noisy results. The scanner must only inspect Git project directories, and the TUI must let users choose which discovered env files belong to each scope.
 - Public key identity is simple and CLI-native, but account recovery is hard if the private key is lost.
 - If handles are not verified emails, duplicate or misleading handles are possible.
-- Some env vars may appear public, such as feature flags or local service URLs, but storing them in `propagate.yaml` creates inconsistent rules and accidental leakage risk. The MVP should keep all env values out of Git-backed config.
+- Some env vars may appear public, such as feature flags or local service URLs. The MVP must default them to sensitive; users must explicitly mark a variable `non_sensitive` before Propagate stores a direct literal or preview in Git-backed config.
 - AI agents may be able to read local files and terminal output. Propagate can make the safe path obvious, but it cannot guarantee an agent will not misuse access outside Propagate. Sensitive operations still need CLI and server enforcement.
 
 ### Open Questions

@@ -16,14 +16,17 @@ This guide focuses on CLI-facing data models, command contracts, API endpoint co
 - Infrastructure: Terraform
 - Database changes: versioned SQL migrations
 
-The CLI is the product's primary user interface and the only component that handles plaintext env values. The backend receives encrypted env values, encrypted scope key envelopes, metadata, and signed requests.
+The CLI is the product's primary user interface and the only component that handles sensitive plaintext env values. The backend receives encrypted env values, encrypted scope key envelopes, safe metadata, and signed requests; explicitly `non_sensitive` declarations may include short literals or previews in config metadata.
 
 ## 2. CLI Implementation Principles
 
 Implementation should follow these rules consistently:
 
-- Never write env values to `propagate.yaml`, agent instructions, docs, logs, JSON output, or panic output.
-- Treat public-looking env values the same as secrets.
+- Never write sensitive env values to `propagate.yaml`, agent instructions, docs, logs, JSON output, or panic output.
+- Represent sensitive values in `propagate.yaml` only as scope-keyed, algorithm-prefixed digests such as `hmac-sha-256:v1:...`; never use raw SHA-256 plaintext hashes.
+- Only write direct YAML literals for variables explicitly marked `non_sensitive` and short enough for one line; truncate longer non-sensitive values as previews.
+- Never accept env values as normal positional command arguments; use secure no-echo prompts for `env set`.
+- Treat public-looking env values as sensitive unless a human explicitly marks them `non_sensitive`.
 - Keep all decryption and encryption of env values in the CLI.
 - Use signed API requests for cloud reads and writes.
 - Use expected revisions and expected secret version IDs for write operations.
@@ -102,14 +105,16 @@ Top-level logical fields:
 | --- | --- |
 | `version` | Config format version |
 | `team` | Team ID, team name, cloud revision |
-| `scopes` | Scope names, env file mappings, default role access |
+| `scopes` | Scope names, env file mappings, variable declarations, default role access |
 | `members` | Active members and public identity material |
 | `pending` | Join requests and access-change requests |
 | `history` | Optional local non-secret resolution metadata |
 
 Implementation rules:
 
-- Config must never contain env values, masked values, placeholder values, default values, or examples.
+- Config must never contain sensitive plaintext values, masked sensitive values, private material, raw plaintext hashes, or unmarked value-like placeholders/defaults/examples.
+- Variables are sensitive by default. Sensitive declarations must use `digest: "hmac-sha-256:v1:..."`.
+- Explicit `sensitivity: non_sensitive` declarations may use `literal` for short one-line values or `preview` plus `digest` for long values.
 - Config validation must verify public key SHA matches the canonical signing public key.
 - Env file paths must be repo-relative and normalized.
 - Unknown config versions must fail with a clear upgrade message.
@@ -150,7 +155,7 @@ The parser must not evaluate shell expressions, expand variables, or execute any
 
 ### 4.6 Secret Material Model
 
-Plaintext env values only exist in memory during:
+Sensitive plaintext env values only exist in memory during:
 
 - Env import.
 - Env pull after decryption and before local write.
@@ -169,7 +174,7 @@ Encrypted value records include:
 | `scope_key_version` | Scope key version |
 | `expected_version_id` | Conflict detection for writes |
 
-No raw plaintext hash should be uploaded. If fingerprints are needed later, use a keyed construction where the key is unavailable to the cloud.
+No raw plaintext hash should be uploaded. Variable declarations use a keyed HMAC construction where the key is the scope key and the serialized digest carries the algorithm prefix, for example `hmac-sha-256:v1:...`.
 
 ### 4.7 Command Result Model
 
@@ -564,7 +569,7 @@ API calls:
 
 Local writes:
 
-- None by default.
+- `propagate.yaml`, when variable declarations or config revision change after accepted upload.
 
 Success result:
 
@@ -577,17 +582,72 @@ Success result:
 | `removed_count` | Approved tombstones |
 | `skipped_count` | Rejected or unselected changes |
 | `new_versions_count` | Created encrypted versions |
+| `new_config_revision` | Accepted config revision when declarations changed |
 
 Failure behavior:
 
 - If write access denied, upload nothing.
 - If current cloud version IDs differ from expected values, return conflict and advise pull.
 - If local env file has duplicate variables, require confirmation before managing.
-- If no changes are approved, return success/no change.
+- If no secret changes are approved but variable declarations changed, push the metadata snapshot and update `propagate.yaml`.
 
-### 6.8 `propagate env status`
+### 6.8 `propagate env set`
 
-Purpose: show cloud env state for a scope without writing files.
+Purpose: securely set or update one variable in the encrypted cloud store without reading a whole env file.
+
+Usage:
+
+| Command Shape | Behavior |
+| --- | --- |
+| `propagate env set API_TOKEN --scope dev` | Securely prompts for the new value and updates one variable |
+
+Inputs:
+
+| Input | Required | Notes |
+| --- | --- | --- |
+| Variable name | Required | Positional name only, never the value |
+| `--scope` | Optional | Defaults to configured default or `dev` |
+| Secure prompt value | Required | No-echo terminal prompt |
+| `--dry-run` | Optional | Validate and show add/change plan without upload |
+| `--yes` | Optional | Must not bypass secure value prompt |
+
+Local reads:
+
+- Local identity
+- `propagate.yaml`
+
+API calls:
+
+- `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle`
+- `POST /v1/teams/{team_id}/scopes/{scope}/env/push`
+
+Local writes:
+
+- `propagate.yaml`, when the variable declaration and config revision change after accepted upload.
+
+Success result:
+
+| Field | Meaning |
+| --- | --- |
+| `operation_id` | Idempotency key for the single-value update |
+| `scope` | Target scope |
+| `variable` | Variable name |
+| `change_type` | `added` or `changed` |
+| `new_versions_count` | Should be one |
+| `new_config_revision` | Accepted config revision when declaration changed |
+
+Failure behavior:
+
+- If no TTY is available for secure prompt, fail with confirmation/input-required guidance.
+- If a plaintext value is passed as an extra positional argument, reject the command.
+- If write access is denied, upload nothing.
+- If the current cloud version ID differs from the expected value, return conflict and advise pull.
+- For `prod`, require extra confirmation before prompting/uploading.
+- Do not update local env files unless a future explicit flag requests it.
+
+### 6.9 `propagate env status`
+
+Purpose: show cloud env state for a scope without writing files, and compare local env values against the latest cloud YAML declarations.
 
 Inputs:
 
@@ -603,6 +663,7 @@ Local reads:
 
 API calls:
 
+- `GET /v1/teams/{team_id}/config`
 - `GET /v1/teams/{team_id}/scopes/{scope}/env/status`
 
 Local writes:
@@ -615,17 +676,19 @@ Success result:
 | --- | --- |
 | `scope` | Scope checked |
 | `variables` | Variable names and safe metadata |
+| `config_stale` | Whether local `propagate.yaml` is behind the cloud revision |
+| `local_state` | Per-variable comparison: equal, missing, different, or undeclared |
 | `last_updated` | Last update metadata |
 | `can_read` | Whether actor has read access |
 
-Human output may display masked values after local decryption. JSON should default to variable names and metadata unless a future explicit flag allows masked values.
+Human output may display masked values after local decryption. JSON should default to variable names, declaration digests, local state, and metadata; it must not include plaintext or masked values. If the cloud config revision is newer, suggest `propagate config pull`. If local values are missing or digest-mismatched, suggest `propagate env pull`.
 
 Failure behavior:
 
 - If read access denied, show identity and requested scope, then write nothing.
 - If decrypt fails, return a crypto/access error and do not show partial plaintext.
 
-### 6.9 `propagate team status`
+### 6.10 `propagate team status`
 
 Purpose: show team membership, pending requests, access changes, and pull activity.
 
@@ -664,7 +727,7 @@ Failure behavior:
 - If cloud unavailable, show local config membership and mark audit activity unavailable.
 - If identity is not a member, show pending/request guidance.
 
-### 6.10 Agent Guidance Flow
+### 6.11 Agent Guidance Flow
 
 Agent guidance is exposed through `propagate init` in MVP. A later `propagate agents setup` command can reuse the same service.
 
@@ -691,7 +754,7 @@ API calls:
 
 Failure behavior:
 
-- Never write env values or private material.
+- Never write env values or private material into generated agent instructions.
 - Refuse malformed managed blocks unless user confirms repair.
 - Preserve unrelated content.
 - Report skipped/failed targets without breaking project setup.
@@ -740,8 +803,8 @@ Common error payload:
 | `GET /v1/teams/{team_id}/config` | `config pull` | Return current normalized config snapshot |
 | `POST /v1/teams/{team_id}/config/push` | `config push` | Apply admin-approved config decisions and envelopes |
 | `GET /v1/teams/{team_id}/scopes/{scope}/key-envelope` | `config push` | Return the actor's active encrypted scope key envelope for approval/envelope creation |
-| `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle` | `env pull`, `env push` | Return active envelope and encrypted current values |
-| `POST /v1/teams/{team_id}/scopes/{scope}/env/push` | `env push` | Apply encrypted upserts/removals with version checks |
+| `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle` | `env pull`, `env push`, `env set` | Return active envelope and encrypted current values |
+| `POST /v1/teams/{team_id}/scopes/{scope}/env/push` | `env push`, `env set` | Apply encrypted upserts/removals, including single-value updates, with version checks |
 | `GET /v1/teams/{team_id}/scopes/{scope}/env/status` | `env status` | Return safe env metadata and encrypted values if needed for masking |
 | `POST /v1/teams/{team_id}/events/pull` | `env pull` | Record successful pull event |
 | `GET /v1/teams/{team_id}/status` | `team status` | Return membership and audit summaries |
@@ -767,7 +830,7 @@ Server behavior:
 Request responsibilities:
 
 - Include first admin public identity material.
-- Include normalized config snapshot without env values.
+- Include normalized config snapshot with safe variable declarations.
 - Include scopes and env file mappings.
 - Include encrypted initial secret versions.
 - Include first admin encrypted scope key envelopes.
@@ -787,7 +850,7 @@ Server behavior:
 - Reserve replay nonce.
 - Enforce idempotency by operation ID.
 - Create team transactionally through stored functions.
-- Reject any config snapshot containing env values.
+- Reject any config snapshot containing sensitive plaintext values or raw plaintext hashes.
 
 ### 7.5 `GET /v1/teams/{team_id}/config/status`
 
@@ -827,7 +890,7 @@ Server behavior:
 Request responsibilities:
 
 - Include expected cloud revision.
-- Include normalized target config snapshot without env values.
+- Include normalized target config snapshot with safe variable declarations.
 - Include approved, declined, and skipped decision summaries.
 - Include encrypted scope key envelopes for newly approved scope access.
 - Include operation ID.
@@ -847,7 +910,7 @@ Server behavior:
 - Verify expected revision.
 - Enforce idempotency by operation ID.
 - Apply decisions transactionally through stored functions.
-- Reject plaintext env values in snapshots or metadata.
+- Reject sensitive plaintext env values and raw plaintext hashes in snapshots or metadata.
 
 ### 7.8 `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle`
 
@@ -889,7 +952,7 @@ Request responsibilities:
 - Include operation ID.
 - Include expected config revision.
 - Include expected current version IDs for changed/removed variables.
-- Include encrypted new value versions.
+- Include encrypted new value versions. `env set` sends exactly one encrypted upsert.
 - Include tombstones for approved removals.
 - Include safe counts and env file paths.
 
@@ -907,7 +970,7 @@ Server behavior:
 - Verify write access.
 - Verify expected versions.
 - Apply encrypted versions and tombstones transactionally.
-- Reject plaintext env values and raw plaintext hashes.
+- Reject sensitive plaintext env values and raw plaintext hashes.
 
 ### 7.11 `GET /v1/teams/{team_id}/scopes/{scope}/env/status`
 
@@ -1037,6 +1100,7 @@ Error messages should not:
 | Config | Valid examples, unknown versions, invalid keys, env value rejection, unsafe paths, duplicate members |
 | Env parser | Quotes, comments, blank lines, export syntax, duplicate variables, unknown syntax preservation |
 | Masking | Short values, empty values, Unicode, no accidental full reveal |
+| Secure prompting | `env set` no-echo prompt, no positional value acceptance, no prompt leaks in errors |
 | Crypto | Round trip, wrong recipient failure, associated data mismatch, nonce uniqueness |
 | API signing | Canonicalization, body digest mismatch, timestamp skew, nonce inclusion |
 | Error mapping | API errors to exit codes and messages |
@@ -1080,6 +1144,8 @@ Recommended integration flows:
 - Env pull into missing local file.
 - Env pull with existing unrelated variables.
 - Env push added/changed/removed variables.
+- Env set adding one variable.
+- Env set changing one variable.
 - Env push conflict with stale version ID.
 - Config pull with local pending changes.
 - Team status with last pull and never-pulled members.
@@ -1090,7 +1156,7 @@ End-to-end tests should run against disposable backend resources or a local API/
 
 Critical end-to-end assertions:
 
-- `propagate.yaml` never contains env values after any command.
+- `propagate.yaml` never contains sensitive plaintext values or raw plaintext hashes after any command.
 - API receives encrypted env values only.
 - Pull access denial writes no files.
 - Write access denial uploads nothing.
@@ -1158,7 +1224,7 @@ The sentinel must not appear in:
 | --- | --- |
 | Cloud unavailable | Do local-only work where safe; no mutation assumed |
 | Config revision mismatch | Stop and instruct pull/resolve |
-| Secret version mismatch | Stop affected env push and instruct pull/retry |
+| Secret version mismatch | Stop affected env push or env set and instruct pull/retry |
 | Replay rejection | Do not retry same signed request with same nonce |
 | Clock skew | Show clock guidance |
 | Rate limited | Respect retry metadata and return cloud unavailable/rate limited |
@@ -1172,6 +1238,8 @@ The sentinel must not appear in:
 | Agent guidance file has malformed markers | Refuse automatic edit and explain repair |
 | Multiple agent targets | Let user choose; in non-interactive mode require explicit target list |
 | Generated guidance would include unsafe text | Refuse write and report validation error |
+| `env set` receives value as extra positional arg | Reject command and instruct secure prompt usage |
+| `env set` has no TTY | Fail unless a future explicit non-echo input channel is provided |
 
 ## 11. Implementation Order
 
@@ -1192,9 +1260,10 @@ Recommended implementation sequence:
 13. `config push`.
 14. `env pull`.
 15. `env push`.
-16. `env status`.
-17. Agent guidance installer.
-18. End-to-end and security regression tests.
+16. `env set`.
+17. `env status`.
+18. Agent guidance installer.
+19. End-to-end and security regression tests.
 
 This order front-loads data safety, validation, and read-only contracts before adding mutating flows.
 
@@ -1206,8 +1275,9 @@ The CLI MVP is implementation-ready when:
 - Every mutating command supports dry-run where defined.
 - Every API request is signed and replay-protected.
 - Every cloud mutation carries an operation ID.
+- `env set` uses secure no-echo prompting and rejects positional plaintext values.
 - Config and env writes are atomic.
-- `propagate.yaml` never contains env values.
+- `propagate.yaml` never contains sensitive plaintext values or raw plaintext hashes.
 - No tests leak sentinel env values.
 - Permission denied paths write no local env files and upload nothing.
 - Conflict paths leave local and cloud state unchanged.

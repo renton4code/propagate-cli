@@ -15,7 +15,7 @@ The MVP implementation choices are:
 - Infrastructure: Terraform for Google Cloud and Supabase project resources
 - Database changes: versioned SQL migrations for schema, indexes, policies, and stored functions
 - Secret model: end-to-end encrypted values, encrypted locally before upload
-- Team configuration: Git-backed `propagate.yaml` that never stores env values
+- Team configuration: Git-backed `propagate.yaml` with safe variable declarations
 
 ## 2. Design Principles
 
@@ -23,8 +23,8 @@ Propagate should be secure by default, predictable in Git workflows, and comfort
 
 Key principles:
 
-- Plaintext env values never leave the user's machine during normal operation, whether they are secret, public, or local-only.
-- `propagate.yaml` is safe to commit because it contains metadata and public keys only, never env values.
+- Sensitive plaintext env values never leave the user's machine during normal operation. Public-looking values are still sensitive by default; explicitly `non_sensitive` short literals or previews may be written to Git-backed config and cloud metadata.
+- `propagate.yaml` is safe to commit because sensitive values are represented only by scope-keyed, algorithm-prefixed digests such as `hmac-sha-256:v1:...`. Explicitly non-sensitive short values may be stored as literals; longer non-sensitive values are stored as previews such as `aaa...zzz`.
 - Cloud state is authoritative for encrypted secrets and audit history.
 - Git state is authoritative for human-reviewed team membership proposals.
 - Admin approval requires an admin client because only clients can encrypt scope keys for newly approved members.
@@ -87,7 +87,7 @@ Propagate stores local user identity and cache data under `~/.propagate`.
 | `~/.propagate/identity` | Local private identity bundle | Yes |
 | `~/.propagate/profile` | Handle, default API URL, local preferences | No sensitive secrets, but should still be private |
 | `~/.propagate/cache` | Non-secret cloud metadata cache, such as last seen revisions | No |
-| Project `propagate.yaml` | Team config, scopes, public keys, pending requests | No env values of any kind |
+| Project `propagate.yaml` | Team config, scopes, public keys, pending requests, safe variable declarations | No sensitive plaintext or raw plaintext hashes |
 | Project agent instruction or skill files | Repo-local guidance for AI coding agents | No env values, private keys, decrypted output, or tokens |
 
 Filesystem permissions:
@@ -150,9 +150,9 @@ For each environment variable version:
 - The CLI generates a fresh nonce.
 - The plaintext value is encrypted locally using the current scope key.
 - Associated data binds the ciphertext to team ID, scope, variable name, env file path, secret version, and algorithm version.
-- The CLI uploads only ciphertext, nonce, algorithm metadata, and non-secret metadata.
+- The CLI uploads ciphertext, nonce, algorithm metadata, safe variable declarations, and non-secret metadata.
 
-All env values are handled through this encrypted path. The implementation should not special-case "public" env values into `propagate.yaml`, because that creates inconsistent behavior and makes accidental leakage more likely.
+All managed values are uploaded as encrypted secret versions for cloud storage. Variable declarations in `propagate.yaml` default to sensitive and store a scope-keyed HMAC digest of the value using the explicit prefix `hmac-sha-256:v1:`. The digest key is the scope key, so a committed YAML file is not useful for offline guessing without secret access. Users may explicitly mark a variable `non_sensitive`; short one-line values can then be stored as literals, while longer values are truncated to previews and retain a keyed digest.
 
 Variable names and env file paths are treated as metadata. They are visible to the cloud because the product needs status screens, diffs, and file mapping. The documentation and UI should be honest about this. If a team considers variable names sensitive, a later version can add encrypted names, but that adds complexity to querying, diffs, and status output.
 
@@ -202,10 +202,10 @@ Recommended endpoints by responsibility:
 | Team setup | Create team, first admin, scopes, initial config revision, initial encrypted secrets and envelopes |
 | Config sync | Fetch config snapshot, compare revisions, push admin-approved config decisions |
 | Secret read | Return encrypted scope key envelope and encrypted secret versions for an authorized member |
-| Secret write | Accept encrypted secret upserts/deletions from authorized writers |
+| Secret write | Accept encrypted secret upserts/deletions from authorized writers, including single-value updates from `env set` |
 | Audit | Record pull, push, config, access, and error-relevant events |
 
-The API must be idempotent where possible. Client-supplied operation IDs should be used for setup, config push, and env push so retries do not duplicate audit events or create duplicate versions.
+The API must be idempotent where possible. Client-supplied operation IDs should be used for setup, config push, env push, and env set so retries do not duplicate audit events or create duplicate versions.
 
 ### 8.1 Go API Structure
 
@@ -272,8 +272,8 @@ Stores canonical cloud revisions of the Git-backed config.
 | id | Revision record ID |
 | team_id | Parent team |
 | revision_number | Monotonic team-local revision |
-| config_hash | Hash of normalized non-secret config |
-| config_snapshot | Normalized config metadata snapshot, without env values |
+| config_hash | Hash of normalized config metadata and safe variable declarations |
+| config_snapshot | Normalized config metadata, env file mappings, and safe variable declarations |
 | pushed_by_key_sha | Admin who pushed the revision |
 | pushed_at | Push timestamp |
 | operation_id | Idempotency key |
@@ -282,7 +282,9 @@ Important constraints:
 
 - One revision number per team.
 - One operation ID per team for idempotent retries.
-- Config snapshots must never include plaintext, masked, example, placeholder, public, or default env values.
+- Config snapshots must never include sensitive plaintext, masked sensitive values, raw plaintext hashes, private keys, or tokens.
+- Sensitive variable declarations must use an algorithm-prefixed keyed digest such as `hmac-sha-256:v1:...`.
+- Direct literals are allowed only for variables explicitly marked `non_sensitive` and short enough to fit on one line; longer non-sensitive values use previews.
 
 ### 9.3 members
 
@@ -493,7 +495,7 @@ Permission behavior:
 | --- | --- |
 | None | No secret read or write |
 | Read | Pull env values and view env status |
-| Write | Read plus push env changes |
+| Write | Read plus push env changes and set individual env values |
 | Admin | Manage config, approve joins, approve access changes, and write all scopes unless future policy restricts it |
 
 The client should also perform local permission checks for early, friendly errors. The server remains authoritative.
@@ -523,7 +525,7 @@ Stored functions should not expose raw tables directly to the CLI. The Go API sh
 | --- | --- | --- |
 | Request canonicalization | Go Cloud Run API | It is protocol logic and should be easy to version with the API |
 | Signature verification | Go Cloud Run API | Ed25519 verification and timestamp checks are easier to implement safely in Go and can share request-signing fixtures with the CLI |
-| Encryption and decryption | CLI | The database must never see plaintext env values or plaintext scope keys |
+| Encryption and decryption | CLI | The database must never see sensitive plaintext env values or plaintext scope keys |
 | Scope key envelope creation | CLI | Admin clients encrypt scope keys for recipients in the end-to-end encryption model |
 | YAML parsing and validation | CLI, with server-side metadata validation | Git config is local file state; server should only validate normalized metadata snapshots |
 | Env file parsing and merging | CLI | This depends on local filesystem state and user confirmation |
@@ -580,7 +582,7 @@ Nonce storage is expected to stay small because rows are short-lived. The cleanu
 
 ### 11.5 Transaction Rules
 
-Config push and env push should be single database transactions.
+Config push and env push should be single database transactions. `env set` uses the env push transaction path with a single encrypted upsert.
 
 Config push transaction requirements:
 
@@ -589,7 +591,7 @@ Config push transaction requirements:
 - Enforce idempotency through the operation ID.
 - Apply approved member and access changes.
 - Insert encrypted scope key envelopes supplied by the admin client.
-- Insert a new config revision snapshot without env values.
+- Insert a new config revision snapshot with safe variable declarations.
 - Update the team current revision.
 - Append audit events.
 
@@ -600,6 +602,7 @@ Env push transaction requirements:
 - Insert immutable encrypted secret versions.
 - Update current version pointers.
 - Mark approved removals as tombstones.
+- Update the config snapshot and bump the config revision when variable declarations change.
 - Enforce idempotency through the operation ID.
 - Append audit events.
 
@@ -616,12 +619,12 @@ Security rules:
 - Stored functions should derive roles and permissions from database state, not from client-provided claims.
 - Functions that need elevated privileges should use tightly scoped execution privileges and a fixed search path.
 - Function inputs should use team IDs, public key SHAs, scope IDs, operation IDs, ciphertext, envelopes, and metadata only.
-- Function inputs and outputs must never contain plaintext env values or plaintext scope keys.
+- Function inputs and outputs must never contain sensitive plaintext env values or plaintext scope keys.
 - Raw table access should not be granted to anonymous or end-user Supabase roles.
 
 ## 12. Config File Design
 
-`propagate.yaml` is committed to Git and contains non-secret metadata. It must never contain env values of any kind, including values that look public, harmless, masked, placeholder-only, or default-like.
+`propagate.yaml` is committed to Git and contains team metadata plus safe variable declarations. Sensitive values must never appear directly. Non-sensitive literals require an explicit `sensitivity: non_sensitive` declaration.
 
 Logical sections:
 
@@ -629,7 +632,7 @@ Logical sections:
 | --- | --- |
 | Version | Config format version |
 | Team | Team ID, name, cloud revision |
-| Scopes | Scope names, env file mappings, default role access |
+| Scopes | Scope names, env file mappings, variable declarations, default role access |
 | Members | Active members, handles, public key SHA, public keys, roles |
 | Pending | Join requests, role changes, scope access changes |
 | History | Optional local history of declined or resolved requests, without env values |
@@ -638,7 +641,9 @@ Config validation should check:
 
 - Known config version.
 - Team ID and cloud revision format.
-- No env value fields or value-like literals in scope, variable, pending, member, history, or metadata sections.
+- Sensitive variables use keyed digest declarations with an algorithm prefix.
+- Non-sensitive literals are explicitly marked and short; long non-sensitive values use previews.
+- No raw plaintext hashes, private keys, access tokens, or unmarked value-like literals in scope, variable, pending, member, history, or metadata sections.
 - Valid public keys and public key SHA matches.
 - Scope names are valid and unique.
 - Env file paths are relative and inside the Git worktree.
@@ -666,7 +671,7 @@ Config writes should preserve comments and ordering where possible. If round-tri
 13. CLI creates first admin scope key envelopes.
 14. CLI sends a signed setup request to the cloud API.
 15. Go API calls stored functions that create the team transactionally and record audit events.
-16. CLI writes `propagate.yaml` with the returned team ID and cloud revision, but without env values.
+16. CLI writes `propagate.yaml` with the returned team ID, cloud revision, env file mappings, and safe variable declarations.
 17. CLI detects supported AI agent instruction or skill targets in the repository.
 18. CLI offers to add or update Propagate agent guidance.
 19. If confirmed, CLI writes a managed instruction block or Propagate skill template without env values or private material.
@@ -752,14 +757,45 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 8. User approves all or selected changes.
 9. CLI confirms server-side write access before upload.
 10. CLI encrypts approved new values locally.
-11. CLI sends encrypted upserts and tombstones with expected current versions.
-12. Go API validates write permission and version preconditions through stored functions.
-13. Database transaction creates immutable secret versions, updates current pointers, and records audit events.
-14. CLI prints a masked summary.
+11. CLI updates local variable declarations with keyed digests or explicit non-sensitive literals/previews.
+12. CLI sends encrypted upserts, tombstones, expected current versions, and the updated config snapshot.
+13. Go API validates write permission and version preconditions through stored functions.
+14. Database transaction creates immutable secret versions, updates current pointers, stores the new config revision, and records audit events.
+15. CLI updates local `propagate.yaml` with the accepted revision and prints a masked summary.
 
 If the user lacks write access, the CLI should refuse before upload and explain how to request access.
 
-### 13.7 Team Status
+### 13.7 Env Set
+
+1. User runs `propagate env set NAME --scope dev`.
+2. CLI loads identity and config.
+3. CLI prompts for the value using a secure no-echo prompt.
+4. CLI requests current encrypted cloud values and the user's scope envelope.
+5. CLI decrypts the scope key locally.
+6. CLI determines whether the variable is added or changed.
+7. CLI verifies write access before upload.
+8. CLI encrypts the new value locally.
+9. CLI updates the variable declaration in the target scope.
+10. CLI sends one encrypted upsert, expected current version metadata, and the updated config snapshot through the env push API.
+11. Go API validates write permission and version preconditions through stored functions.
+12. Database transaction creates one immutable secret version, updates the current pointer, stores the new config revision, and records audit events.
+13. CLI updates local `propagate.yaml` with the accepted revision and prints a safe summary with scope, variable name, add/change status, and operation ID.
+
+The plaintext value must never be accepted as a positional command argument, shown in output, written as a sensitive literal in `propagate.yaml`, or logged. `env set` should not update local env files unless a future explicit flag requests it.
+
+### 13.8 Env Status
+
+`propagate env status` should fetch the latest cloud config snapshot and the encrypted env status bundle. The CLI decrypts the scope key locally, hashes local env file values with the declaration algorithm, and compares those local digests to the latest cloud declarations.
+
+The command should report:
+
+- Whether local `propagate.yaml` is behind the cloud config revision.
+- Variable names and env file paths from the latest cloud declarations.
+- Local state per variable: equal, missing, different, or undeclared.
+- Last updated metadata from cloud secret versions.
+- Next steps: `propagate config pull` when YAML is stale, and `propagate env pull` when values differ or are missing.
+
+### 13.9 Team Status
 
 `propagate team status` should combine local config and cloud audit summaries:
 
@@ -971,14 +1007,17 @@ This prevents accidental overwrites without requiring pessimistic locks.
 
 ### 19.1 Plaintext Handling
 
-The CLI should treat plaintext env values as sensitive.
+The CLI should treat plaintext env values as sensitive by default.
 
 Rules:
 
 - Do not log plaintext values.
 - Do not include plaintext values in errors.
 - Do not include plaintext values in analytics or audit metadata.
-- Do not write env values to `propagate.yaml`, including public, placeholder, default, example, or masked values.
+- Do not write sensitive env values to `propagate.yaml`.
+- Do not write raw hashes of plaintext values. Use scope-keyed, algorithm-prefixed digests such as `hmac-sha-256:v1:...`.
+- Do not write direct literals unless the variable is explicitly marked `non_sensitive` and the value fits on one short line; truncate longer non-sensitive values as previews.
+- Do not accept env values as positional CLI arguments; `env set` must use secure no-echo prompting or an explicit non-echo input channel.
 - Do not write env values to generated agent instructions, skills, prompts, tool logs, or machine-readable output.
 - Do not include private key material, access tokens, cloud credentials, prompt text, or conversation text in generated agent guidance or audit metadata.
 - Mask values in all TUI and terminal output.
@@ -990,7 +1029,7 @@ Go cannot guarantee immediate memory zeroization for all strings. The implementa
 
 ### 19.2 Cloud Trust Boundary
 
-In end-to-end encryption mode, Supabase is trusted for availability, metadata storage, authorization checks, and audit history. It is not trusted with plaintext env values or plaintext scope keys.
+In end-to-end encryption mode, Supabase is trusted for availability, metadata storage, authorization checks, and audit history. It is not trusted with sensitive plaintext env values or plaintext scope keys.
 
 A compromised cloud database could expose:
 
@@ -1005,7 +1044,7 @@ A compromised cloud database could expose:
 
 It should not expose:
 
-- Plaintext env values.
+- Sensitive plaintext env values.
 - User private keys.
 - Plaintext scope keys.
 
@@ -1144,12 +1183,12 @@ Recommended coverage:
 | Env parsing | Quoting, comments, empty values, duplicate names, preserve unrelated values |
 | TUI decisions | Approval, decline, skip, cancel, selection state, masked values |
 | API authorization | Read/write/admin permissions, revoked members, replay rejection, revision preconditions |
-| Supabase transactions | Config push atomicity, env push conflicts, idempotent retries |
+| Supabase transactions | Config push atomicity, env push conflicts, env set partial updates, idempotent retries |
 | Agent guidance | Target detection, managed block replacement, idempotent reruns, malformed marker handling, no env value leakage |
 | Agent command contracts | JSON schema stability, exit codes, non-interactive failure, dry-run summaries |
-| End-to-end flows | First setup, join request, admin approval, env pull, env push, revoke access |
+| End-to-end flows | First setup, join request, admin approval, env pull, env push, env set, revoke access |
 
-Security-specific tests should assert that plaintext env values never appear in logs, command output, audit rows, config snapshots, `propagate.yaml`, or API error bodies. This applies to public and placeholder env values as well as secrets.
+Security-specific tests should assert that sensitive plaintext env values never appear in logs, command output, audit rows, config snapshots, `propagate.yaml`, or API error bodies. Public-looking and placeholder values are sensitive by default unless explicitly marked `non_sensitive`; sentinel fixtures should cover both default-sensitive and explicit non-sensitive cases.
 
 ## 23. Deployment And Operations
 
@@ -1167,7 +1206,7 @@ Terraform responsibilities:
 Migration responsibilities:
 
 - Supabase Postgres tables, indexes, constraints, and enum-like checks.
-- Stored functions for replay nonce reservation, permission resolution, config push, env pull bundle fetch, env push, and audit summaries.
+- Stored functions for replay nonce reservation, permission resolution, config push, env pull bundle fetch, env push/env set, and audit summaries.
 - Row-level security policies if direct Supabase access is ever introduced for internal tooling.
 - Safe forward migrations and rollback notes where practical.
 
@@ -1225,6 +1264,7 @@ Operational recommendations:
 - `propagate config push`.
 - `propagate env pull`.
 - `propagate env push`.
+- `propagate env set`.
 - `propagate env status`.
 - `propagate team status`.
 
@@ -1274,4 +1314,4 @@ The safest MVP architecture is a Go CLI that performs all encryption locally, a 
 
 The most important implementation detail is preserving the end-to-end encryption boundary: Supabase can store and authorize access to encrypted material, but only local Propagate clients with valid private keys can decrypt scope keys and env values.
 
-The second most important detail is revision discipline. Config pushes and env pushes should always carry expected revisions or versions so Propagate does not silently overwrite team decisions or secret updates.
+The second most important detail is revision discipline. Config pushes, env pushes, and single-value env set operations should always carry expected revisions or versions so Propagate does not silently overwrite team decisions or secret updates.

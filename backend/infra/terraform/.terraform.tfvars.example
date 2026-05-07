@@ -1,0 +1,20 @@
+project_id  = "your-gcp-project-id"
+region      = "us-central1"
+environment = "dev"
+
+service_name = "propagate-api"
+image        = "us-central1-docker.pkg.dev/your-gcp-project-id/propagate/propagate-api:latest"
+
+min_instance_count    = 0
+max_instance_count    = 3
+container_concurrency = 40
+
+# Keep secret values out of Terraform. Create versions with gcloud or CI.
+secret_ids = [
+  "propagate-database-url",
+]
+
+secret_env = {
+  PROPAGATE_DATABASE_URL = "propagate-database-url"
+}
+

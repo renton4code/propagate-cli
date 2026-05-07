@@ -113,12 +113,12 @@ Config snapshot fields:
 | --- | --- |
 | `version` | Config format version |
 | `team` | Team ID, name, revision |
-| `scopes` | Scope names, env file mappings, default access |
+| `scopes` | Scope names, env file mappings, variable declarations, default access |
 | `members` | Public identity material and roles |
 | `pending` | Non-secret pending requests |
 | `history` | Optional non-secret resolution metadata |
 
-The API must validate that config snapshots contain no env values, masked values, placeholders, examples, defaults, private keys, or tokens.
+The API must validate that config snapshots contain no sensitive plaintext values, masked sensitive values, raw plaintext hashes, private keys, or tokens. Sensitive variable declarations must use an algorithm-prefixed keyed digest such as `hmac-sha-256:v1:...`. Explicit `non_sensitive` declarations may contain short `literal` values or truncated `preview` values.
 
 ### 5.3 Encrypted Secret Records
 
@@ -172,7 +172,7 @@ Allowed audit metadata:
 
 Forbidden audit metadata:
 
-- Plaintext env values.
+- Sensitive plaintext env values.
 - Masked env values.
 - Raw plaintext hashes.
 - Prompt text.
@@ -539,13 +539,16 @@ Authentication: signed.
 
 Required permission: write on scope.
 
+Used by: `propagate env push` and `propagate env set`.
+
 Request data:
 
 | Field | Purpose |
 | --- | --- |
 | `operation_id` | Idempotency |
 | `expected_config_revision` | Config revision the CLI used |
-| `upserts` | Encrypted new versions |
+| `target_config_snapshot` | Updated metadata snapshot when variable declarations changed |
+| `upserts` | Encrypted new versions; `env set` sends exactly one upsert |
 | `removals` | Tombstones with expected current version IDs |
 | `safe_counts` | Added, changed, removed counts |
 | `client` | CLI and safe client metadata |
@@ -554,9 +557,11 @@ Validation:
 
 - Actor must have write access.
 - Upserts must include ciphertext, nonce, algorithm, and expected current version where appropriate.
+- A single-upsert request from `env set` is valid and should use the same transaction path as broader env push.
+- A metadata-only env push is valid when it carries `target_config_snapshot`; this lets the CLI update sensitivity declarations without changing encrypted values.
 - Removals must include expected current version.
 - Env file paths must be repo-relative.
-- Reject plaintext env values and raw plaintext hashes.
+- Reject sensitive plaintext env values and raw plaintext hashes.
 
 Stored function:
 
@@ -569,6 +574,8 @@ Response data:
 | `created_versions` | Variable/version IDs for accepted upserts |
 | `removed_variables` | Tombstone summaries |
 | `conflicts` | Version conflicts, if any |
+| `config_revision` | New config revision when declarations changed |
+| `config_hash` | Hash of accepted config snapshot |
 | `audit_events_count` | Events appended |
 
 Conflict behavior:
@@ -653,7 +660,7 @@ The API should call stored functions for data-local transactions.
 | Push config revision | Config push handler | Transactional revision update and access changes |
 | Fetch config snapshot | Config handlers | Return current normalized config |
 | Fetch pull bundle | Pull bundle/status handlers | Return envelope, mappings, encrypted versions |
-| Apply env push | Env push handler | Transactional encrypted upserts/tombstones |
+| Apply env push | Env push and env set handlers | Transactional encrypted upserts/tombstones, including single-value updates |
 | Record pull event | Pull event handler | Append audit event |
 | Fetch team status | Team status handler | Membership and audit summaries |
 
@@ -664,7 +671,7 @@ Stored function requirements:
 - Validate critical permissions for mutating operations.
 - Avoid dynamic SQL unless absolutely necessary.
 - Return typed errors or SQLSTATE/detail values that the Go API maps to stable API codes.
-- Never accept or return plaintext env values or plaintext scope keys.
+- Never accept sensitive plaintext env values or return decrypted env values or plaintext scope keys.
 
 ## 11. Database And Connection Handling
 
@@ -698,13 +705,15 @@ Validate:
 - Operation ID format.
 - Ciphertext, nonce, and algorithm presence.
 - Expected revision/version preconditions.
+- Variable declaration sensitivity.
+- Digest strings include an algorithm prefix.
 
 Reject:
 
 - Absolute env file paths.
 - Path traversal.
 - Unknown config versions.
-- Env value fields in config snapshots.
+- Sensitive env value fields in config snapshots.
 - Raw plaintext hashes.
 - Private key material.
 - Access tokens in metadata.
@@ -835,6 +844,7 @@ Required flows:
 - Config push approving member and uploading envelope.
 - Pull bundle read.
 - Env push write.
+- Env set single-value write through env push endpoint.
 - Env status metadata.
 - Pull event audit.
 - Team status.
@@ -867,6 +877,7 @@ Assert sentinels never appear in:
 | Scope missing | 404 `scope_not_found` |
 | Config revision mismatch | 409 `revision_conflict` |
 | Secret version mismatch | 409 `secret_version_conflict` |
+| Single-value env set payload | Treat as valid one-upsert env push |
 | Operation ID reused with different payload | 409 `idempotency_conflict` |
 | Plaintext-like config snapshot | 422 `plaintext_rejected` |
 | Database unavailable | 503 `cloud_unavailable` |
@@ -892,10 +903,11 @@ Recommended API implementation sequence:
 10. Config push endpoint.
 11. Pull bundle and key envelope endpoints.
 12. Env push endpoint.
-13. Env status endpoint.
-14. Pull event endpoint.
-15. Team status endpoint.
-16. Full integration and security regression tests.
+13. Env set handler path using the env push endpoint.
+14. Env status endpoint.
+15. Pull event endpoint.
+16. Team status endpoint.
+17. Full integration and security regression tests.
 
 This order establishes protocol safety and read-only paths before high-risk mutating operations.
 
@@ -906,6 +918,7 @@ The API MVP is implementation-ready when:
 - Every protected endpoint verifies signatures, timestamps, body digests, and nonces.
 - Every mutating endpoint requires operation ID and enforces idempotency.
 - Every write uses expected revisions or version preconditions.
+- The env push endpoint accepts one-upsert `env set` payloads without a separate backend endpoint.
 - Stored functions own config push and env push transactions.
 - Permission checks are derived from database state.
 - Responses follow the common envelope.
