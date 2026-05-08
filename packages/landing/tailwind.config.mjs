@@ -11,6 +11,9 @@ export default {
           950: "#09090b",
         },
       },
+      spacing: {
+        13: "3.25rem",
+      },
       animation: {
         "fade-in": "fadeIn 0.6s ease-out forwards",
         "slide-up": "slideUp 0.6s ease-out forwards",
