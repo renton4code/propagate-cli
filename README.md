@@ -4,14 +4,15 @@ Propagate is organized as a Go monorepo.
 
 ## Layout
 
-- `cli/`: Propagate CLI implementation.
-- `backend/`: Backend API module placeholder. The current implementation pass is CLI-only.
-- `go.work`: Go workspace tying both modules together.
+- `packages/backend/`: Backend API (Go, Cloud Run).
+- `packages/cli/`: Propagate CLI (Go, Bubble Tea).
+- `packages/landing/`: Marketing site (Astro, deployed to Netlify).
+- `go.work`: Go workspace tying backend and CLI together.
 
 ## Common Commands
 
 ```bash
-go test ./cli/... ./backend/...
-go run ./cli/cmd/propagate version
+go test ./packages/cli/... ./packages/backend/...
+go run ./packages/cli/cmd/propagate version
 ```
 

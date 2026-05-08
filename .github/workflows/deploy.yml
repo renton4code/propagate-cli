@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "backend/**"
+      - "packages/backend/**"
 
 permissions:
   contents: read
@@ -43,7 +43,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: ./packages/backend
           push: true
           tags: |
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:latest
@@ -68,7 +68,7 @@ jobs:
           TF_CLOUD_ORGANIZATION: ${{ env.TF_ORGANIZATION }}
         with:
           workspace: ${{ env.TF_WORKSPACE }}
-          directory: ./backend/infra/terraform
+          directory: ./packages/backend/infra/terraform
 
       - name: Create Terraform run
         uses: hashicorp/tfc-workflows-github/actions/create-run@v1.3.1

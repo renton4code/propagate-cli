@@ -1,6 +1,6 @@
 go 1.22
 
 use (
-	./backend
-	./cli
+	./packages/backend
+	./packages/cli
 )
