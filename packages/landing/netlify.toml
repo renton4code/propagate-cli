@@ -5,8 +5,3 @@
 
 [build.environment]
   NODE_VERSION = "20"
-
-[[headers]]
-  for = "/*"
-  [headers.values]
-    Basic-Auth = "propagate:$BASIC_AUTH_PASSWORD"
