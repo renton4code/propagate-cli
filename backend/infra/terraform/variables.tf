@@ -32,9 +32,16 @@ variable "artifact_registry_repository_id" {
   default     = "propagate"
 }
 
-variable "image" {
-  description = "Fully qualified container image to deploy to Cloud Run."
+variable "image_tag" {
+  description = "Tag of the container image in Artifact Registry to deploy. Used to construct the default image URL."
   type        = string
+  default     = "latest"
+}
+
+variable "image" {
+  description = "Fully qualified container image to deploy to Cloud Run. Defaults to the image built from project_id, region, artifact_registry_repository_id, service_name, and image_tag."
+  type        = string
+  default     = null
 }
 
 variable "container_port" {

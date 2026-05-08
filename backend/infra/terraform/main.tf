@@ -1,4 +1,13 @@
+data "google_artifact_registry_docker_image" "api" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = var.artifact_registry_repository_id
+  image_name    = "${var.service_name}:${var.image_tag}"
+}
+
 locals {
+  image = coalesce(var.image, data.google_artifact_registry_docker_image.api.self_link)
+
   labels = merge(
     {
       app         = "propagate"
@@ -116,7 +125,7 @@ resource "google_cloud_run_v2_service" "api" {
     }
 
     containers {
-      image = var.image
+      image = local.image
 
       ports {
         container_port = var.container_port
