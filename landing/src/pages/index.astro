@@ -1,0 +1,265 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const features = [
+  {
+    icon: "🔐",
+    title: "End-to-end encrypted",
+    description:
+      "Variables are encrypted locally with your public/private key pair before leaving your machine. The server never sees plaintext values.",
+  },
+  {
+    icon: "⌨️",
+    title: "CLI-first",
+    description:
+      "Everything happens in the terminal. No browser required, no dashboard to log in to. Designed to fit into the way developers already work.",
+  },
+  {
+    icon: "👥",
+    title: "Team access control",
+    description:
+      "Invite teammates by public key. Assign roles and environment scopes. Review membership changes in Git like any other code.",
+  },
+  {
+    icon: "📄",
+    title: "Git-backed config",
+    description:
+      "Team configuration lives in propagate.yaml in your repo. Access changes are pull requests — reviewable, diffable, and auditable.",
+  },
+  {
+    icon: "🔑",
+    title: "Key-based identity",
+    description:
+      "No passwords, no OAuth. Your identity is a keypair stored in ~/.propagate. Works great for both humans and AI coding agents.",
+  },
+  {
+    icon: "🌍",
+    title: "Multi-environment",
+    description:
+      "Separate scopes for dev, staging, and prod. Grant teammates access to the environments they need — and nothing more.",
+  },
+];
+
+const steps = [
+  {
+    step: "01",
+    command: "propagate init",
+    description: "Initialize a project and create your team. Generates a keypair and a propagate.yaml in your repo.",
+  },
+  {
+    step: "02",
+    command: "propagate push",
+    description: "Encrypts your .env file locally and syncs the ciphertext to the cloud. Your plaintext never leaves your machine.",
+  },
+  {
+    step: "03",
+    command: "propagate pull",
+    description: "Teammates pull and decrypt variables using their own private key. No sharing keys, no shared secrets.",
+  },
+];
+---
+
+<Layout>
+  <!-- Nav -->
+  <header class="fixed top-0 inset-x-0 z-50 border-b border-zinc-800/50 bg-zinc-950/80 backdrop-blur-md">
+    <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-emerald-400 font-mono font-medium text-sm">$</span>
+        <span class="font-semibold tracking-tight">propagate</span>
+      </div>
+      <nav class="hidden md:flex items-center gap-8 text-sm text-zinc-400">
+        <a href="#features" class="hover:text-zinc-100 transition-colors">Features</a>
+        <a href="#how-it-works" class="hover:text-zinc-100 transition-colors">How it works</a>
+        <a
+          href="https://github.com/renton4code/propagate-cli"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="hover:text-zinc-100 transition-colors flex items-center gap-1.5"
+        >
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+          </svg>
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="min-h-screen flex flex-col items-center justify-center px-6 pt-14 text-center relative overflow-hidden">
+      <!-- Glow -->
+      <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-emerald-500/8 rounded-full blur-2xl pointer-events-none"></div>
+
+      <div class="relative max-w-3xl mx-auto animate-fade-in">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/5 text-emerald-400 text-xs font-mono mb-8">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          CLI-first secret management
+        </div>
+
+        <h1 class="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-zinc-50 leading-tight mb-6">
+          Stop sharing <span class="text-emerald-400">.env files</span><br />
+          over Slack
+        </h1>
+
+        <p class="text-lg sm:text-xl text-zinc-400 leading-relaxed mb-10 max-w-2xl mx-auto">
+          Propagate encrypts your environment variables locally and syncs them
+          securely across your team — entirely from the terminal, no dashboard
+          required.
+        </p>
+
+        <!-- Install command -->
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
+          <div class="group flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-3 font-mono text-sm cursor-pointer hover:border-zinc-600 transition-colors"
+               onclick="navigator.clipboard.writeText('go install github.com/renton4code/propagate-cli/cli/cmd/propagate@latest')">
+            <span class="text-emerald-400 select-none">$</span>
+            <span class="text-zinc-300">go install propagate@latest</span>
+            <svg class="w-4 h-4 text-zinc-600 group-hover:text-zinc-400 transition-colors ml-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </div>
+          <a
+            href="https://github.com/renton4code/propagate-cli"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex items-center gap-2 px-5 py-3 rounded-lg bg-zinc-100 text-zinc-900 text-sm font-semibold hover:bg-white transition-colors"
+          >
+            View on GitHub
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+            </svg>
+          </a>
+        </div>
+
+        <!-- Terminal preview -->
+        <div class="max-w-xl mx-auto bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden text-left shadow-2xl shadow-black/40">
+          <div class="flex items-center gap-1.5 px-4 py-3 border-b border-zinc-800">
+            <div class="w-3 h-3 rounded-full bg-zinc-700"></div>
+            <div class="w-3 h-3 rounded-full bg-zinc-700"></div>
+            <div class="w-3 h-3 rounded-full bg-zinc-700"></div>
+            <span class="ml-2 text-zinc-500 text-xs font-mono">propagate</span>
+          </div>
+          <div class="p-5 font-mono text-sm space-y-2">
+            <div><span class="text-emerald-400">$</span> <span class="text-zinc-300">propagate init</span></div>
+            <div class="text-zinc-500">✓ Keypair generated at ~/.propagate</div>
+            <div class="text-zinc-500">✓ Team "acme" created</div>
+            <div class="text-zinc-500">✓ propagate.yaml added to repo</div>
+            <div class="mt-2"><span class="text-emerald-400">$</span> <span class="text-zinc-300">propagate push --env dev</span></div>
+            <div class="text-zinc-500">✓ Encrypted 12 variables</div>
+            <div class="text-zinc-500">✓ Synced to cloud</div>
+            <div class="mt-2"><span class="text-emerald-400">$</span> <span class="text-zinc-300">propagate pull --env dev</span></div>
+            <div class="text-zinc-500">✓ Decrypted → .env</div>
+            <div class="flex items-center gap-1 mt-1">
+              <span class="text-emerald-400">$</span>
+              <span class="text-zinc-600 animate-pulse">█</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="py-24 px-6 border-t border-zinc-800/50">
+      <div class="max-w-6xl mx-auto">
+        <div class="text-center mb-16">
+          <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-50 mb-4">
+            Designed for how teams actually work
+          </h2>
+          <p class="text-zinc-400 text-lg max-w-xl mx-auto">
+            No new accounts to create, no browser to open. Just a CLI that fits
+            into your existing workflow.
+          </p>
+        </div>
+
+        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {
+            features.map((f) => (
+              <div class="group p-6 rounded-xl border border-zinc-800 bg-zinc-900/50 hover:border-zinc-700 hover:bg-zinc-900 transition-all duration-200">
+                <div class="text-2xl mb-4">{f.icon}</div>
+                <h3 class="font-semibold text-zinc-100 mb-2">{f.title}</h3>
+                <p class="text-zinc-400 text-sm leading-relaxed">{f.description}</p>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how-it-works" class="py-24 px-6 border-t border-zinc-800/50">
+      <div class="max-w-4xl mx-auto">
+        <div class="text-center mb-16">
+          <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-50 mb-4">
+            Three commands. Fully secure.
+          </h2>
+          <p class="text-zinc-400 text-lg max-w-xl mx-auto">
+            Get your team synced in minutes, not days.
+          </p>
+        </div>
+
+        <div class="space-y-6">
+          {
+            steps.map((s, i) => (
+              <div class="flex gap-6 items-start p-6 rounded-xl border border-zinc-800 bg-zinc-900/30 hover:border-zinc-700 transition-colors">
+                <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                  <span class="text-emerald-400 font-mono text-xs font-medium">{s.step}</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-mono text-sm text-zinc-300 mb-2">
+                    <span class="text-emerald-400">$ </span>{s.command}
+                  </div>
+                  <p class="text-zinc-400 text-sm leading-relaxed">{s.description}</p>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="py-24 px-6 border-t border-zinc-800/50">
+      <div class="max-w-2xl mx-auto text-center">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-400 text-xs font-mono mb-8">
+          open source · MIT license
+        </div>
+        <h2 class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-50 mb-4">
+          Ready to stop leaking .env files?
+        </h2>
+        <p class="text-zinc-400 text-lg mb-10">
+          Propagate is open source. Star it, use it, contribute to it.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <div class="flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-3 font-mono text-sm cursor-pointer hover:border-zinc-600 transition-colors"
+               onclick="navigator.clipboard.writeText('go install github.com/renton4code/propagate-cli/cli/cmd/propagate@latest')">
+            <span class="text-emerald-400">$</span>
+            <span class="text-zinc-300">go install propagate@latest</span>
+          </div>
+          <a
+            href="https://github.com/renton4code/propagate-cli"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex items-center gap-2 px-5 py-3 rounded-lg bg-zinc-100 text-zinc-900 text-sm font-semibold hover:bg-white transition-colors"
+          >
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+            </svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-zinc-800/50 py-8 px-6">
+    <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-zinc-500">
+      <div class="flex items-center gap-2 font-mono">
+        <span class="text-emerald-400">$</span>
+        <span>propagate</span>
+      </div>
+      <p>Open source under the MIT License</p>
+    </div>
+  </footer>
+</Layout>
