@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Scroll-driven Slack mockup.
- * - A tall outer wrapper provides scroll distance.
- * - A sticky inner viewport holds the mockup.
- * - Scroll progress (0 → 1) drives a scripted typing timeline.
+ * Scroll-driven Slack mockup — neo-brutalism edition.
  */
 
-const INCOMING = "@here, I see we moved to clickhouse, can smb share the staging creds? 🙏";
-const DRAFT_1 = "Dude again, I sent 1Password link in #backend channel 15 minutes ago...";
-const DRAFT_2 = "run `propagate env pull --scope staging` — I just added you to propagate.yaml";
-const TYPO_DRAFT = "run `propagte";
-const TYPO_BACKTO = 7;
+const INCOMING = "@here, I see we added STRIPE_SECRET_KEY, can smb share it for test account? 🙏";
+const DRAFT_1 = "I sent 1Password link in #backend channel yesterday, let me find the link...";
+const DRAFT_2 = "Just run `propagate env pull` to pull up-to-date env variables!";
+const TYPO_DRAFT = "Im so done with this shi";
+const TYPO_BACKTO = 0;
 
 function buildKeystrokeWeights(text: string): number[] {
   const w: number[] = [];
@@ -83,23 +80,36 @@ function computeState(p: number) {
 }
 
 export function SlackScene() {
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const wrapperRef     = useRef<HTMLDivElement>(null);
+  const barFillRef     = useRef<HTMLDivElement>(null);
+  const barContainerRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
+    let raf = 0;
     const onScroll = () => {
-      const el = wrapperRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const vh = window.innerHeight;
-      const total = el.offsetHeight - vh;
-      const scrolled = Math.min(Math.max(-rect.top, 0), total);
-      setProgress(total > 0 ? scrolled / total : 0);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const el = wrapperRef.current;
+        if (!el) return;
+        const rect  = el.getBoundingClientRect();
+        const total = el.offsetHeight - window.innerHeight;
+        const scrolled = Math.min(Math.max(-rect.top, 0), total);
+        const p = total > 0 ? scrolled / total : 0;
+
+        // Direct DOM — no React re-render
+        if (barFillRef.current) barFillRef.current.style.width = `${p * 100}%`;
+        if (barContainerRef.current) {
+          barContainerRef.current.style.opacity = (p > 0.001 && p < 0.999) ? "1" : "0";
+        }
+        setProgress(p);
+      });
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onScroll);
     };
@@ -110,50 +120,79 @@ export function SlackScene() {
 
   return (
     <div ref={wrapperRef} className="relative" style={{ height: "360vh" }}>
-      {/* Progress bar — sits flush under the fixed nav (h-14 = 3.5rem) */}
-      <div className="sticky top-14 z-40 h-[2px] w-full" style={{ background: "var(--neu-dark)" }}>
+      {/* Progress bar — fixed so it never jumps on Mac rubber-band scroll */}
+      <div
+        ref={barContainerRef}
+        style={{
+          position:   "fixed",
+          top:        "3.5rem",   /* flush below the fixed nav */
+          left:       0,
+          right:      0,
+          zIndex:     48,
+          height:     "6px",
+          background: "#1a1a1a",
+          opacity:    0,
+          transition: "opacity 0.25s",
+          pointerEvents: "none",
+        }}
+      >
         <div
-          className="h-full"
+          ref={barFillRef}
           style={{
-            width: `${progress * 100}%`,
-            background: "var(--primary)",
-            boxShadow: "0 0 16px var(--primary), 0 0 4px var(--primary)",
-            transition: "width 0.05s linear",
+            height:     "100%",
+            width:      "0%",
+            background: "#FFE500",
+            willChange: "width",
           }}
         />
       </div>
 
-      <div className="sticky top-14 flex h-[calc(100vh-3.5rem)] items-center justify-center overflow-hidden px-4">
-        <div aria-hidden={true} className="mesh-bg -z-10" />
+      <div
+        className="sticky top-14 flex items-center justify-center overflow-hidden px-4"
+        style={{ height: "calc(100vh - 3.5rem)" }}
+      >
+        <div aria-hidden className="mesh-bg" style={{ position: "absolute", inset: 0, zIndex: 0 }} />
 
-        <div className="grid w-full max-w-6xl grid-cols-1 items-center gap-12 lg:grid-cols-[1fr_1.2fr]">
-          {/* Left: headline */}
-          <div>
-            <div className="mb-6 inline-flex items-center gap-2">
-              <span
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ background: "var(--stripe-2)", boxShadow: "0 0 8px var(--stripe-2)" }}
-              />
-              <span className="eyebrow">Before Propagate</span>
+        <div
+          className="grid w-full items-center gap-12"
+          style={{
+            position: "relative",
+            zIndex: 1,
+            maxWidth: "72rem",
+            gridTemplateColumns: "1fr",
+          }}
+        >
+          <style>{`@media(min-width:1024px){.slack-grid{grid-template-columns:1fr 1.2fr!important}}`}</style>
+          <div className="slack-grid grid w-full items-center gap-12" style={{ gridTemplateColumns: "1fr" }}>
+            {/* Left: headline */}
+            <div>
+              <div
+                className="inline-block mb-6 px-3 py-1 text-xs font-extrabold uppercase tracking-widest"
+                style={{ border: "2px solid #fff", color: "#888", letterSpacing: "0.18em" }}
+              >
+                Before Propagate
+              </div>
+              <h2
+                className="font-extrabold leading-none"
+                style={{ fontSize: "clamp(2.5rem,6vw,4.5rem)", letterSpacing: "-0.03em", color: "#fff" }}
+              >
+                .env over Slack&nbsp;<br />
+                <span style={{ color: "#FFE500" }}>Never </span><span style={{ color: "#FFE500", fontFamily: "'Instrument Serif','Iowan Old Style',Georgia,serif", fontStyle: "italic", fontWeight: 400, fontSize: "1.05em", background: "rgba(255,229,0,0.2)", padding: "0 0.15em" }}>again</span>
+              </h2>
+              <p className="mt-6 max-w-md text-base leading-relaxed" style={{ color: "#888" }}>
+                Everytime your team sets a new variable, it's a hussle to securely share it to everyone.
+                Propagate makes secrets a CLI command, not a conversation.
+              </p>
             </div>
-            <h2 className="text-4xl font-bold leading-tight text-zinc-50 md:text-6xl">
-              .env over Slack.<br />
-              <span className="text-gradient">Never again.</span>
-            </h2>
-            <p className="mt-6 max-w-md text-base leading-relaxed text-zinc-400">
-              We add new variables, people ask for it.
-              Passowrd manager links everywhere, but it's still a pain to manage.
-              Declare variables once and sync them securely across team, CI and coding agents.
-            </p>
-          </div>
 
-          {/* Right: Slack mockup */}
-          <SlackMock
-            incomingVisible={incomingVisible}
-            draft={draft}
-            caret={showCaret}
-            isTyping={isTyping}
-          />
+            {/* Right: Slack mockup */}
+            <SlackMock
+              incomingVisible={incomingVisible}
+              draft={draft}
+              caret={showCaret}
+              isTyping={isTyping}
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -172,117 +211,147 @@ function SlackMock({
   isTyping: boolean;
 }) {
   return (
-    <div
-      className="gradient-border p-[1px]"
-      style={{ boxShadow: "0 30px 80px -20px rgba(0,0,0,0.6), var(--shadow-neu)" }}
-    >
-      <div className="overflow-hidden rounded-[19px]" style={{ background: "var(--surface)" }}>
+    <div style={{ border: "2px solid #fff", boxShadow: "6px 6px 0 #FFE500" }}>
+      <div style={{ background: "#111" }}>
         {/* Window chrome */}
-        <div className="flex items-center gap-2 px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
-          <span className="h-3 w-3 rounded-full" style={{ background: "oklch(0.65 0.2 25)" }} />
-          <span className="h-3 w-3 rounded-full" style={{ background: "oklch(0.78 0.16 80)" }} />
-          <span className="h-3 w-3 rounded-full" style={{ background: "oklch(0.72 0.18 150)" }} />
-          <div className="ml-4 flex items-center gap-2">
-            <span style={{ color: "var(--primary)" }}>#</span>
-            <span className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
-              dev
-            </span>
-            <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-              · 8 members
-            </span>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "12px 20px",
+            borderBottom: "2px solid #fff",
+            background: "#1a1a1a",
+          }}
+        >
+          <span style={{ height: 12, width: 12, borderRadius: "50%", background: "#ff5f57", display: "inline-block" }} />
+          <span style={{ height: 12, width: 12, borderRadius: "50%", background: "#ffbd2e", display: "inline-block" }} />
+          <span style={{ height: 12, width: 12, borderRadius: "50%", background: "#28c840", display: "inline-block" }} />
+          <div style={{ marginLeft: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: "#FFE500", fontWeight: 800 }}>#</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>dev</span>
+            <span style={{ fontSize: 11, color: "#666" }}>· 8 members</span>
           </div>
         </div>
 
         {/* Message area */}
-        <div className="min-h-[300px] space-y-4 px-6 pb-6 pt-4">
+        <div style={{ minHeight: 280, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
           <div
-            className="flex gap-3 transition-all duration-500"
             style={{
+              display: "flex",
+              gap: 12,
               opacity: incomingVisible ? 1 : 0,
               transform: incomingVisible ? "translateY(0)" : "translateY(12px)",
+              transition: "opacity 0.4s, transform 0.4s",
             }}
           >
             <div
-              className="h-10 w-10 flex-shrink-0 rounded-xl"
               style={{
-                background: "var(--gradient-primary)",
-                boxShadow: "inset 2px 2px 4px rgba(255,255,255,0.15), inset -2px -2px 4px rgba(0,0,0,0.3)",
+                height: 36,
+                width: 36,
+                flexShrink: 0,
+                background: "#FFE500",
+                border: "2px solid #fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 800,
+                fontSize: 13,
+                color: "#000",
               }}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-2">
-                <span className="text-sm font-bold" style={{ color: "var(--foreground)" }}>
-                  Maya Chen
-                </span>
-                <span className="text-[11px]" style={{ color: "var(--muted-foreground)" }}>
-                  10:42 AM
-                </span>
+            >
+              MC
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>Maya Chen</span>
+                <span style={{ fontSize: 11, color: "#555" }}>10:42 AM</span>
               </div>
               <div
-                className="mt-1 inline-block max-w-full rounded-2xl rounded-tl-sm px-4 py-2.5"
-                style={{ background: "var(--surface-2)", boxShadow: "var(--shadow-neu-sm)" }}
+                style={{
+                  marginTop: 6,
+                  display: "inline-block",
+                  maxWidth: "100%",
+                  padding: "10px 14px",
+                  background: "#1a1a1a",
+                  border: "2px solid #333",
+                  boxShadow: "3px 3px 0 #333",
+                }}
               >
-                <p className="text-sm leading-relaxed" style={{ color: "var(--foreground)" }}>
-                  {INCOMING}
-                </p>
+                <p style={{ fontSize: 13, lineHeight: 1.6, color: "#eee" }}>{INCOMING}</p>
               </div>
             </div>
           </div>
 
           {isTyping && (
-            <div
-              className="flex items-center gap-2 pl-13 text-xs"
-              style={{ color: "var(--muted-foreground)" }}
-            >
-              <span className="flex gap-1">
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full"
-                  style={{ background: "var(--primary)", animationDelay: "0ms" }}
-                />
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full"
-                  style={{ background: "var(--primary)", animationDelay: "150ms" }}
-                />
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full"
-                  style={{ background: "var(--primary)", animationDelay: "300ms" }}
-                />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 48, fontSize: 12, color: "#666" }}>
+              <span style={{ display: "flex", gap: 4 }}>
+                {[0, 150, 300].map((delay) => (
+                  <span
+                    key={delay}
+                    style={{
+                      height: 6,
+                      width: 6,
+                      borderRadius: "50%",
+                      background: "#FFE500",
+                      display: "inline-block",
+                      animation: `bounce 0.8s ${delay}ms infinite`,
+                    }}
+                  />
+                ))}
               </span>
               <span>you are typing…</span>
+              <style>{`
+                @keyframes bounce {
+                  0%, 100% { transform: translateY(0); }
+                  50%       { transform: translateY(-4px); }
+                }
+              `}</style>
             </div>
           )}
         </div>
 
         {/* Composer */}
-        <div className="px-5 pb-5">
-          <div className="neu-inset px-4 py-3">
-            <p className="min-h-[1.5rem] text-sm leading-relaxed" style={{ color: "var(--foreground)" }}>
-              {draft || (
-                <span style={{ color: "var(--muted-foreground)" }}>
-                  Message #dev
-                </span>
-              )}
+        <div style={{ padding: "0 20px 20px" }}>
+          <div
+            style={{
+              background: "#0c0c0c",
+              border: "2px solid #fff",
+              padding: "12px 16px",
+            }}
+          >
+            <p style={{ minHeight: "1.5rem", fontSize: 13, lineHeight: 1.6, color: "#fff", fontFamily: "inherit" }}>
+              {draft || <span style={{ color: "#444" }}>Message #dev</span>}
               {caret && (
                 <span
-                  className="ml-[1px] inline-block h-4 w-[2px] -mb-0.5 align-middle"
                   style={{
-                    background: "var(--primary)",
-                    animation: "blink 1s steps(2) infinite",
-                    boxShadow: "0 0 6px var(--primary)",
+                    marginLeft: 1,
+                    display: "inline-block",
+                    width: 2,
+                    height: "0.9em",
+                    verticalAlign: "-0.05em",
+                    background: "#FFE500",
+                    animation: "blink 1s ease-in-out infinite",
                   }}
                 />
               )}
             </p>
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex gap-2">
-                {["B", "I", "U", "{ }"].map((s) => (
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["B", "I", "U", "{}"].map((s) => (
                   <span
                     key={s}
-                    className="grid h-7 w-7 place-items-center rounded-md text-[11px]"
                     style={{
-                      color: "var(--muted-foreground)",
-                      boxShadow: "var(--shadow-neu-sm)",
-                      background: "var(--surface)",
+                      display: "grid",
+                      placeItems: "center",
+                      height: 28,
+                      width: 28,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: "#555",
+                      background: "#1a1a1a",
+                      border: "2px solid #333",
+                      cursor: "default",
                     }}
                   >
                     {s}
@@ -290,11 +359,16 @@ function SlackMock({
                 ))}
               </div>
               <button
-                className="rounded-xl px-4 py-2 text-xs font-bold"
                 style={{
-                  background: "var(--gradient-primary)",
-                  color: "var(--primary-foreground)",
-                  boxShadow: "var(--shadow-neu-sm), 0 0 20px rgba(52,211,153,0.3)",
+                  background: "#FFE500",
+                  color: "#000",
+                  border: "2px solid #fff",
+                  boxShadow: "3px 3px 0 #fff",
+                  padding: "6px 14px",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
                 }}
               >
                 Send →

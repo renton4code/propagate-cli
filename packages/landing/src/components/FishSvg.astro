@@ -1,0 +1,18 @@
+---
+interface Props {
+  width?: number;
+  height?: number;
+  color?: string;
+  eyeColor?: string;
+}
+const { width = 30, height = 22, color = '#FFE500', eyeColor = '#0c0c0c' } = Astro.props;
+---
+<svg width={width} height={height} viewBox="0 0 30 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- tail > -->
+  <path d="M3,5 L9,11 L3,17" stroke={color} stroke-width="2.5" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+  <!-- body -->
+  <path d="M27,11 C24,4 12,4 9,11 C12,18 24,18 27,11 Z" fill={color}/>
+  <!-- eye -->
+  <circle cx="20" cy="9.5" r="2" fill={eyeColor}/>
+  <circle cx="20.6" cy="9" r="0.6" fill={color}/>
+</svg>

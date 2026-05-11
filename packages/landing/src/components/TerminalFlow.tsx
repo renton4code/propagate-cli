@@ -121,9 +121,8 @@ function Caret() {
         height:        "0.78em",
         marginLeft:    "1px",
         verticalAlign: "-0.05em",
-        background:    "var(--primary)",
+        background:    "#FFE500",
         animation:     "termBlink 1.1s ease-in-out infinite",
-        boxShadow:     "0 0 5px var(--primary)",
         willChange:    "opacity",
       }}
     />
@@ -149,11 +148,11 @@ function TerminalLineRow({
   const isIndent = text.startsWith("  ");
 
   const color =
-    line.kind === "cmd" ? "var(--foreground)"       :
-    isCheck              ? "var(--primary)"          :
-    isWarn               ? "oklch(0.78 0.16 80)"     :
-    isIndent             ? "var(--muted-foreground)" :
-                           "var(--foreground)";
+    line.kind === "cmd" ? "#fff"    :
+    isCheck              ? "#FFE500" :
+    isWarn               ? "#ff9944" :
+    isIndent             ? "#888"    :
+                           "#fff";
 
   return (
     <div
@@ -175,31 +174,45 @@ function ScrollHint({ visible }: { visible: boolean }) {
   return (
     <div
       style={{
-        position:   "absolute",
-        bottom:     "2rem",
-        left:       "50%",
-        transform:  "translateX(-50%)",
-        display:    "flex",
+        position:      "absolute",
+        bottom:        "2rem",
+        left:          "50%",
+        transform:     "translateX(-50%)",
+        display:       "flex",
         flexDirection: "column",
-        alignItems: "center",
-        gap:        "0.25rem",
-        fontSize:   "0.75rem",
-        color:      "var(--muted-foreground)",
-        opacity:    visible ? 1 : 0,
-        transition: "opacity 0.5s ease",
+        alignItems:    "center",
+        gap:           "0.5rem",
+        opacity:       visible ? 1 : 0,
+        transition:    "opacity 0.5s ease",
         pointerEvents: "none",
-        whiteSpace: "nowrap",
+        whiteSpace:    "nowrap",
       }}
     >
-      <span>scroll to continue</span>
+      <span
+        style={{
+          fontSize:       "0.65rem",
+          fontWeight:     800,
+          letterSpacing:  "0.2em",
+          textTransform:  "uppercase",
+          color:          "#FFE500",
+          background:     "#0c0c0c",
+          border:         "2px solid #FFE500",
+          padding:        "2px 8px",
+        }}
+      >
+        scroll to continue
+      </span>
       <svg
         width="16" height="16" viewBox="0 0 16 16" fill="none"
-        style={{ animation: visible ? "scrollBounce 1.2s ease-in-out infinite" : "none" }}
+        style={{
+          color:     "#FFE500",
+          animation: visible ? "scrollBounce 1.2s ease-in-out infinite" : "none",
+        }}
       >
         <path
           d="M8 3v10M4 9l4 4 4-4"
-          stroke="currentColor" strokeWidth="1.5"
-          strokeLinecap="round" strokeLinejoin="round"
+          stroke="currentColor" strokeWidth="2"
+          strokeLinecap="square" strokeLinejoin="miter"
         />
       </svg>
     </div>
@@ -224,22 +237,24 @@ function TerminalWindow({
 
   return (
     <div style={{ width: "100%", maxWidth: "42rem", margin: "0 auto", position: "relative" }}>
-      {/* Step badge */}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
+      {/* Step badge + label */}
+      <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.25rem" }}>
         <span
-          className="font-mono"
           style={{
-            fontSize:   "0.7rem",
-            padding:    "0.2rem 0.6rem",
-            borderRadius: "0.375rem",
-            background: "rgba(52,211,153,0.08)",
-            border:     "1px solid rgba(52,211,153,0.2)",
-            color:      "var(--primary)",
+            fontFamily: "'JetBrains Mono',monospace",
+            fontSize:   "0.75rem",
+            fontWeight: 800,
+            padding:    "0.3rem 0.75rem",
+            background: "#FFE500",
+            color:      "#000",
+            border:     "2px solid #fff",
+            boxShadow:  "3px 3px 0 #fff",
+            flexShrink: 0,
           }}
         >
           {def.step} / {String(totalSteps).padStart(2, "0")}
         </span>
-        <span style={{ fontSize: "0.875rem", color: "var(--muted-foreground)" }}>
+        <span style={{ fontSize: "1.25rem", fontWeight: 800, color: "#fff", letterSpacing: "-0.02em" }}>
           {def.label}
         </span>
       </div>
@@ -247,37 +262,37 @@ function TerminalWindow({
       {/* Terminal window */}
       <div
         style={{
-          borderRadius: "0.75rem",
-          overflow:     "hidden",
-          background:   "var(--surface)",
-          border:       "1px solid var(--border)",
-          boxShadow:    "0 24px 60px -16px rgba(0,0,0,0.6), var(--shadow-neu)",
+          overflow:  "hidden",
+          background: "#111",
+          border:    "2px solid #fff",
+          boxShadow: "6px 6px 0 #FFE500",
         }}
       >
         {/* Title bar */}
         <div
           style={{
-            display:       "flex",
-            alignItems:    "center",
-            gap:           "0.5rem",
-            padding:       "0.75rem 1rem",
-            borderBottom:  "1px solid var(--border)",
+            display:      "flex",
+            alignItems:   "center",
+            gap:          "0.5rem",
+            padding:      "0.6rem 1rem",
+            borderBottom: "2px solid #fff",
+            background:   "#1a1a1a",
           }}
         >
-          <span style={{ width: "0.75rem", height: "0.75rem", borderRadius: "50%", background: "oklch(0.65 0.2 25)", flexShrink: 0 }} />
-          <span style={{ width: "0.75rem", height: "0.75rem", borderRadius: "50%", background: "oklch(0.78 0.16 80)", flexShrink: 0 }} />
-          <span style={{ width: "0.75rem", height: "0.75rem", borderRadius: "50%", background: "oklch(0.72 0.18 150)", flexShrink: 0 }} />
+          <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57", flexShrink: 0 }} />
+          <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#ffbd2e", flexShrink: 0 }} />
+          <span style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840", flexShrink: 0 }} />
           <div
-            className="font-mono"
             style={{
-              marginLeft:  "0.75rem",
-              fontSize:    "0.75rem",
-              display:     "flex",
-              gap:         "0.25rem",
-              color:       "var(--muted-foreground)",
+              marginLeft: "0.75rem",
+              fontSize:   "0.75rem",
+              display:    "flex",
+              gap:        "0.25rem",
+              fontFamily: "'JetBrains Mono',monospace",
+              color:      "#555",
             }}
           >
-            <span style={{ color: "var(--primary)" }}>{def.user}</span>
+            <span style={{ color: "#FFE500", fontWeight: 700 }}>{def.user}</span>
             <span>:</span>
             <span>{def.dir}</span>
           </div>
@@ -307,9 +322,10 @@ const SCROLL_PER_TERMINAL = 300;
 
 export function TerminalFlow({ terminals }: { terminals: TerminalDef[] }) {
   const n          = terminals.length;
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const barFillRef = useRef<HTMLDivElement>(null);   // progress bar — direct DOM update
-  const rafRef     = useRef<number>(0);
+  const wrapperRef      = useRef<HTMLDivElement>(null);
+  const barFillRef      = useRef<HTMLDivElement>(null);
+  const barContainerRef = useRef<HTMLDivElement>(null);
+  const rafRef          = useRef<number>(0);
 
   const [view, setView] = useState({ index: 0, phase: 0, opacity: 1 });
 
@@ -326,6 +342,9 @@ export function TerminalFlow({ terminals }: { terminals: TerminalDef[] }) {
       // Progress bar: direct DOM — zero React overhead, zero CSS transition lag.
       if (barFillRef.current) {
         barFillRef.current.style.width = `${progress * 100}%`;
+      }
+      if (barContainerRef.current) {
+        barContainerRef.current.style.opacity = (progress > 0.001 && progress < 0.999) ? "1" : "0";
       }
 
       const rawIndex = progress * n;
@@ -368,15 +387,20 @@ export function TerminalFlow({ terminals }: { terminals: TerminalDef[] }) {
 
   return (
     <div ref={wrapperRef} style={{ position: "relative", height: `${n * SCROLL_PER_TERMINAL}vh` }}>
-      {/* Progress bar — filled by direct DOM ref, no React re-render */}
+      {/* Progress bar — fixed so it never jumps on Mac rubber-band scroll */}
       <div
+        ref={barContainerRef}
         style={{
-          position:   "sticky",
-          top:        "3.5rem",
-          zIndex:     40,
-          height:     "2px",
-          width:      "100%",
-          background: "var(--neu-dark)",
+          position:      "fixed",
+          top:           "3.5rem",
+          left:          0,
+          right:         0,
+          zIndex:        48,
+          height:        "6px",
+          background:    "#1a1a1a",
+          opacity:       0,
+          transition:    "opacity 0.25s",
+          pointerEvents: "none",
         }}
       >
         <div
@@ -384,8 +408,7 @@ export function TerminalFlow({ terminals }: { terminals: TerminalDef[] }) {
           style={{
             height:     "100%",
             width:      "0%",
-            background: "var(--primary)",
-            boxShadow:  "0 0 10px var(--primary)",
+            background: "#FFE500",
             willChange: "width",
           }}
         />

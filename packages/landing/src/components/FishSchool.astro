@@ -1,0 +1,118 @@
+---
+const fish = [
+  { top:  6, size: 1.0,  dur: 55, delay:  0,   dir: "right" },
+  { top: 14, size: 0.65, dur: 44, delay: -12,  dir: "right" },
+  { top: 23, size: 1.25, dur: 68, delay: -28,  dir: "right" },
+  { top: 38, size: 0.8,  dur: 40, delay: -6,   dir: "right" },
+  { top: 52, size: 1.1,  dur: 60, delay: -40,  dir: "right" },
+  { top: 67, size: 0.7,  dur: 36, delay: -18,  dir: "right" },
+  { top: 78, size: 1.35, dur: 72, delay: -50,  dir: "right" },
+  { top: 90, size: 0.85, dur: 48, delay: -34,  dir: "right" },
+  { top: 10, size: 0.9,  dur: 52, delay: -22,  dir: "left"  },
+  { top: 30, size: 1.15, dur: 64, delay: -8,   dir: "left"  },
+  { top: 58, size: 0.7,  dur: 42, delay: -32,  dir: "left"  },
+  { top: 84, size: 1.0,  dur: 58, delay: -16,  dir: "left"  },
+] as const;
+
+// Bubbles: left (%), size (px), dur (s), delay (s), amplitude (px, for sine X)
+const bubbles = [
+  { left:  5, size:  7, dur: 9,  delay:  0,  amp: 18 },
+  { left: 13, size:  5, dur: 12, delay: -3,  amp: 12 },
+  { left: 22, size:  9, dur: 10, delay: -7,  amp: 24 },
+  { left: 31, size:  6, dur: 14, delay: -2,  amp: 16 },
+  { left: 40, size:  8, dur: 11, delay: -9,  amp: 20 },
+  { left: 49, size:  5, dur:  8, delay: -5,  amp: 14 },
+  { left: 57, size: 10, dur: 13, delay: -1,  amp: 22 },
+  { left: 65, size:  6, dur:  9, delay: -6,  amp: 18 },
+  { left: 74, size:  7, dur: 15, delay: -4,  amp: 12 },
+  { left: 82, size:  5, dur: 10, delay: -8,  amp: 20 },
+  { left: 90, size:  8, dur: 12, delay: -3,  amp: 16 },
+  { left: 96, size:  6, dur:  9, delay: -10, amp: 22 },
+  { left: 18, size:  9, dur: 11, delay: -11, amp: 14 },
+  { left: 44, size:  5, dur: 13, delay: -2,  amp: 18 },
+  { left: 70, size:  7, dur:  8, delay: -7,  amp: 24 },
+] as const;
+---
+
+<div class="fish-school" aria-hidden="true">
+  {fish.map((f) => (
+    <div
+      class="fish"
+      style={[
+        `top: ${f.top}vh`,
+        `animation: ${f.dir === "right" ? "swimRight" : "swimLeft"} ${f.dur}s linear ${f.delay}s infinite`,
+        `transform: scale(${f.size})${f.dir === "left" ? " scaleX(-1)" : ""}`,
+        `transform-origin: center`,
+      ].join(";")}
+    >
+      <svg width="30" height="22" viewBox="0 0 30 22" fill="none">
+        <path d="M3,5 L9,11 L3,17" stroke="#FFE500" stroke-width="2.5" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+        <path d="M27,11 C24,4 12,4 9,11 C12,18 24,18 27,11 Z" fill="#FFE500"/>
+        <circle cx="20" cy="9.5" r="2" fill="#0c0c0c"/>
+        <circle cx="20.6" cy="9" r="0.6" fill="#FFE500"/>
+      </svg>
+    </div>
+  ))}
+
+  {bubbles.map((b) => (
+    <div
+      class="bubble"
+      style={[
+        `left: ${b.left}%`,
+        `bottom: -${b.size * 2}px`,
+        `width: ${b.size}px`,
+        `height: ${b.size}px`,
+        `--amp: ${b.amp}px`,
+        `animation: bubbleRise ${b.dur}s linear ${b.delay}s infinite`,
+      ].join(";")}
+    />
+  ))}
+</div>
+
+<style>
+  .fish-school {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+  }
+
+  .fish {
+    position: absolute;
+    opacity: 0.22;
+    will-change: transform;
+  }
+
+  .bubble {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(255, 229, 0, 0.12);
+    border: 1.5px solid rgba(255, 229, 0, 0.35);
+    will-change: transform, opacity;
+  }
+
+  @keyframes swimRight {
+    from { left: -8%; }
+    to   { left: 108%; }
+  }
+
+  @keyframes swimLeft {
+    from { left: 108%; }
+    to   { left: -8%; }
+  }
+
+  /* Sinusoidal rise: Y goes straight up, X oscillates via discrete keyframe stops */
+  @keyframes bubbleRise {
+     0%  { transform: translateY(0)      translateX(0);               opacity: 0;   }
+     5%  { opacity: 0.9; }
+    12%  { transform: translateY(-12vh)  translateX(var(--amp)); }
+    25%  { transform: translateY(-25vh)  translateX(0); }
+    37%  { transform: translateY(-37vh)  translateX(calc(var(--amp) * -1)); }
+    50%  { transform: translateY(-50vh)  translateX(0); }
+    62%  { transform: translateY(-62vh)  translateX(var(--amp)); }
+    75%  { transform: translateY(-75vh)  translateX(0); }
+    87%  { transform: translateY(-87vh)  translateX(calc(var(--amp) * -1)); opacity: 0.7; }
+   100%  { transform: translateY(-103vh) translateX(0);               opacity: 0;   }
+  }
+</style>

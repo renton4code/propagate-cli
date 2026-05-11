@@ -1,4 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="8" fill="#09090b"/>
-  <text x="6" y="23" font-family="monospace" font-size="18" font-weight="600" fill="#34d399">$</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- dark background square -->
+  <rect width="32" height="32" rx="6" fill="#0c0c0c"/>
+  <!-- tail > -->
+  <path d="M5,9 L11,16 L5,23" stroke="#FFE500" stroke-width="2.5" stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+  <!-- body -->
+  <path d="M29,16 C26,8 14,8 11,16 C14,24 26,24 29,16 Z" fill="#FFE500"/>
+  <!-- eye -->
+  <circle cx="22" cy="14" r="2.2" fill="#0c0c0c"/>
+  <circle cx="22.7" cy="13.4" r="0.7" fill="#FFE500"/>
 </svg>

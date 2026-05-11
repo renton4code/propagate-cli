@@ -1,82 +1,85 @@
+/* ─── Neo-brutalism design system ───────────────────────────────────────────── */
 :root {
-  /* Core palette — dark zinc base + emerald primary */
-  --primary:            #34d399; /* emerald-400 */
-  --primary-foreground: #09090b; /* zinc-950   */
-  --stripe-1:           #34d399; /* emerald     */
-  --stripe-2:           #818cf8; /* indigo-400  */
+  --primary:            #FFE500;   /* yellow — the neo-brutalism accent */
+  --primary-foreground: #000000;
 
-  /* Surfaces */
-  --neu-dark:   #09090b; /* zinc-950 */
-  --surface:    #18181b; /* zinc-900 */
-  --surface-2:  #27272a; /* zinc-800 */
+  --bg:       #0c0c0c;
+  --surface:  #111111;
+  --surface-2:#1a1a1a;
 
-  /* Text */
-  --foreground:         #f4f4f5; /* zinc-100 */
-  --muted-foreground:   #71717a; /* zinc-500 */
+  --foreground:       #ffffff;
+  --muted-foreground: #888888;
 
-  /* Border */
-  --border: #3f3f46; /* zinc-700 */
+  --border:   #ffffff;             /* white borders on dark bg */
+  --border-w: 2px;                 /* global border width */
 
-  /* Gradients */
-  --gradient-primary: linear-gradient(135deg, #34d399, #059669);
-  --gradient-border:  linear-gradient(135deg, rgba(52,211,153,0.25), rgba(129,140,248,0.15));
+  /* Hard offset shadows — no blur, no spread */
+  --shadow-lg: 6px 6px 0 var(--primary);
+  --shadow-md: 4px 4px 0 var(--primary);
+  --shadow-sm: 3px 3px 0 var(--primary);
+  --shadow-w:  4px 4px 0 var(--border);  /* white variant */
 
-  /* Neumorphic shadows (dark) */
-  --shadow-neu:    4px 4px 10px rgba(0,0,0,0.5), -2px -2px 6px rgba(255,255,255,0.02);
-  --shadow-neu-sm: 2px 2px 5px  rgba(0,0,0,0.4), -1px -1px 3px rgba(255,255,255,0.02);
+  /* Legacy aliases used by components */
+  --neu-dark:      var(--bg);
+  --shadow-neu:    var(--shadow-md);
+  --shadow-neu-sm: var(--shadow-sm);
+  --gradient-primary: var(--primary);
+
+  /* Stripe colours kept for dots in window chrome */
+  --stripe-1: var(--primary);
+  --stripe-2: #ff4d4d;
 }
 
-/* ─── Mesh gradient background ─────────────────────────────────────────────── */
+/* ─── Background grid texture ───────────────────────────────────────────────── */
 .mesh-bg {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(ellipse 60% 50% at 25% 55%, rgba(52,211,153,0.07) 0%, transparent 70%),
-    radial-gradient(ellipse 50% 60% at 75% 35%, rgba(129,140,248,0.05) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 40% at 50% 80%, rgba(52,211,153,0.04) 0%, transparent 60%);
-  animation: meshDrift 12s ease-in-out infinite alternate;
+  background-image:
+    linear-gradient(rgba(255,229,0,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,229,0,0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
 }
 
-@keyframes meshDrift {
-  from { transform: scale(1)   rotate(0deg);   }
-  to   { transform: scale(1.06) rotate(1.5deg); }
-}
-
-/* ─── Gradient border wrapper ───────────────────────────────────────────────── */
+/* ─── Hard-shadow card wrapper ──────────────────────────────────────────────── */
 .gradient-border {
-  background: var(--gradient-border);
-  border-radius: 20px;
-  padding: 1px;
+  border:     var(--border-w) solid var(--border);
+  box-shadow: var(--shadow-md);
 }
 
-/* ─── Neumorphic inset (composer box) ──────────────────────────────────────── */
+/* ─── Flat inset (composer) ─────────────────────────────────────────────────── */
 .neu-inset {
   background: var(--surface-2);
-  border-radius: 12px;
-  box-shadow:
-    inset 3px 3px 7px rgba(0,0,0,0.45),
-    inset -1px -1px 3px rgba(255,255,255,0.03);
+  border:     var(--border-w) solid var(--border);
 }
 
-/* ─── Gradient text ─────────────────────────────────────────────────────────── */
+/* ─── Accent text ───────────────────────────────────────────────────────────── */
 .text-gradient {
-  background: linear-gradient(130deg, #34d399 0%, #818cf8 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--primary);
+  -webkit-text-fill-color: var(--primary);
 }
 
 /* ─── Eyebrow label ─────────────────────────────────────────────────────────── */
 .eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
+  font-size:      10px;
+  font-weight:    800;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: var(--muted-foreground);
+  color:          var(--muted-foreground);
 }
 
-/* ─── Cursor blink (shared by Slack scene) ──────────────────────────────────── */
+/* ─── Cursor animations ─────────────────────────────────────────────────────── */
+@keyframes termBlink {
+  0%, 45%   { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
 @keyframes blink {
   0%, 45%   { opacity: 1; }
   55%, 100% { opacity: 0; }
+}
+
+@keyframes scrollBounce {
+  0%, 100% { transform: translateY(0);   }
+  50%      { transform: translateY(5px); }
 }

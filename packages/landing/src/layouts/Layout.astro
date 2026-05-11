@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import FishSchool from "../components/FishSchool.astro";
 
 interface Props {
   title?: string;
@@ -26,11 +27,12 @@ const {
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap"
       rel="stylesheet"
     />
   </head>
-  <body class="bg-zinc-950 text-zinc-100 antialiased font-['Inter',sans-serif]">
+  <body class="antialiased" style="background:#0c0c0c;color:#fff;font-family:'Space Grotesk',sans-serif">
+    <FishSchool />
     <slot />
   </body>
 </html>
