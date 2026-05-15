@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
  * Scroll-driven Slack mockup — neo-brutalism edition.
  */
 
-const INCOMING = "@here just pulled main and the app won't start — missing STRIPE_SECRET_KEY and REDIS_URL. Can someone send me the latest .env?";
+const INCOMING_MENTION = "@here";
+const INCOMING_REST = " just pulled main and the app won't start — missing STRIPE_SECRET_KEY and REDIS_URL. Can someone send me the latest .env?";
 const DRAFT_1 = "Check #dev-onboarding, I think Sarah posted a 1Password link last week but it might be exp";
 const DRAFT_2 = "Pull the latest .env with propagate — everyone gets updated vars automatically and securely.";
 const TYPO_DRAFT = "hang on let me get send you the";
@@ -277,7 +278,7 @@ function SlackMock({
                   boxShadow: "3px 3px 0 #333",
                 }}
               >
-                <p style={{ fontSize: 15, lineHeight: 1.6, color: "#eee" }}>{INCOMING}</p>
+                <p style={{ fontSize: 15, lineHeight: 1.6, color: "#eee" }}><span style={{ fontWeight: 800, color: "#fff" }}>{INCOMING_MENTION}</span>{INCOMING_REST}</p>
               </div>
             </div>
           </div>
