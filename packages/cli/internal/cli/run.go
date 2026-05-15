@@ -39,10 +39,11 @@ func Run(args []string, streams Streams) int {
 			streams.WorkDir = cwd
 		}
 	}
+	loadLocalDotenv(streams.WorkDir)
 
 	global, rest, err := parseLeadingGlobal(args)
 	if err != nil {
-		return renderError(streams.Err, global.JSON, err)
+		return renderError(streams.Err, global.JSON, global.NoColor, err)
 	}
 	if len(rest) == 0 {
 		printRootHelp(streams.Out)
@@ -53,6 +54,8 @@ func Run(args []string, streams Streams) int {
 		return runInitCommand(rest[1:], global, streams)
 	case "team":
 		return runTeamCommand(rest[1:], global, streams)
+	case "scope":
+		return runScopeCommand(rest[1:], global, streams)
 	case "config":
 		return runConfigCommand(rest[1:], global, streams)
 	case "env":
@@ -65,7 +68,7 @@ func Run(args []string, streams Streams) int {
 		return ExitSuccess
 	default:
 		err := commandError(ExitUsageError, "usage_error", fmt.Sprintf("Unknown command %q", rest[0]), nil, "Run `propagate help` to see available commands.")
-		return renderError(streams.Err, global.JSON, err)
+		return renderError(streams.Err, global.JSON, global.NoColor, err)
 	}
 }
 
@@ -112,9 +115,11 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "  propagate init [flags]")
 	fmt.Fprintln(w, "  propagate team join [flags]")
 	fmt.Fprintln(w, "  propagate team status [flags]")
+	fmt.Fprintln(w, "  propagate scope create NAME [flags]")
 	fmt.Fprintln(w, "  propagate config status [flags]")
 	fmt.Fprintln(w, "  propagate config pull [flags]")
 	fmt.Fprintln(w, "  propagate config push [flags]")
+	fmt.Fprintln(w, "  propagate config edit [flags]")
 	fmt.Fprintln(w, "  propagate env pull [flags]")
 	fmt.Fprintln(w, "  propagate env push [flags]")
 	fmt.Fprintln(w, "  propagate env set NAME [flags]")
@@ -123,11 +128,13 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "Global flags:")
 	fmt.Fprintln(w, "  --json              render machine-readable JSON")
 	fmt.Fprintln(w, "  --non-interactive   fail instead of prompting")
+	fmt.Fprintln(w, "  --no-color          disable terminal color")
 	fmt.Fprintln(w, "  --api-url VALUE     override Propagate API URL")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  init      create or load local identity and initialize project metadata")
 	fmt.Fprintln(w, "  team      team membership commands")
+	fmt.Fprintln(w, "  scope     scope metadata commands")
 	fmt.Fprintln(w, "  config    config synchronization commands")
 	fmt.Fprintln(w, "  env       environment variable commands")
 	fmt.Fprintln(w, "  version   print CLI version")

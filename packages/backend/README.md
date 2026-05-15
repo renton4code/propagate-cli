@@ -38,3 +38,19 @@ go run ./backend/cmd/api
 ```
 
 The API listens on `PORT`, defaulting to `8080`.
+
+## Run With Docker Compose
+
+From the repository root:
+
+```bash
+cp packages/backend/.env.example packages/backend/.env
+docker compose up --build
+```
+
+This starts Supabase Postgres, runs `migrations/0001_init_schema.sql`, and then
+starts the API with `PROPAGATE_DATABASE_URL` pointed at the local database.
+Supabase Studio is exposed on `http://localhost:54323`.
+
+Host-side backend and CLI commands also read `packages/backend/.env`, so no
+manual export step is required.

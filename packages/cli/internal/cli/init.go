@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -24,12 +25,13 @@ import (
 
 type initOptions struct {
 	globalOptions
-	Handle            string
-	TeamName          string
-	Yes               bool
-	DryRun            bool
-	AgentGuidance     bool
-	SkipAgentGuidance bool
+	Handle              string
+	TeamName            string
+	Yes                 bool
+	DryRun              bool
+	AgentGuidance       bool
+	SkipAgentGuidance   bool
+	ExistingProjectOnly bool
 }
 
 type InitResult struct {
@@ -44,6 +46,7 @@ type InitResult struct {
 	ProjectCreated           bool              `json:"project_created"`
 	ProjectAlreadyConfigured bool              `json:"project_already_configured"`
 	ProjectConfigPath        string            `json:"project_config_path,omitempty"`
+	ConfigRevision           string            `json:"config_revision,omitempty"`
 	ScopesCreated            []string          `json:"scopes_created,omitempty"`
 	EnvFilesMapped           []EnvFileSummary  `json:"env_files_mapped,omitempty"`
 	VariablesDiscoveredCount int               `json:"variables_discovered_count"`
@@ -55,11 +58,18 @@ type InitResult struct {
 }
 
 type EnvFileSummary struct {
-	Path           string `json:"path"`
-	Scope          string `json:"scope"`
-	Tracked        bool   `json:"tracked"`
-	ParentTracked  bool   `json:"parent_tracked"`
-	VariablesCount int    `json:"variables_count"`
+	Path           string                `json:"path"`
+	Scope          string                `json:"scope"`
+	Tracked        bool                  `json:"tracked"`
+	ParentTracked  bool                  `json:"parent_tracked"`
+	VariablesCount int                   `json:"variables_count"`
+	Variables      []InitVariableSummary `json:"-"`
+}
+
+type InitVariableSummary struct {
+	Name        string
+	MaskedValue string
+	ValueKnown  bool
 }
 
 func runInitCommand(args []string, global globalOptions, streams Streams) int {
@@ -80,27 +90,31 @@ func runInitCommand(args []string, global globalOptions, streams Streams) int {
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid init flags", err, "Run `propagate init --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate init does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if opts.AgentGuidance && opts.SkipAgentGuidance {
 		cmdErr := commandError(ExitUsageError, "usage_error", "--agent-guidance and --skip-agent-guidance cannot be used together", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runInit(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderInitResult(streams.Out, opts.JSON, result)
+	renderInitResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
 func runInit(opts initOptions, streams Streams) (InitResult, error) {
 	reader := bufio.NewReader(streams.In)
+	return runInitWithReader(opts, streams, reader)
+}
+
+func runInitWithReader(opts initOptions, streams Streams, reader *bufio.Reader) (InitResult, error) {
 	result := InitResult{
 		OK:                     true,
 		Command:                "init",
@@ -122,7 +136,7 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 	}
 
 	if !identityExists && strings.TrimSpace(opts.Handle) == "" {
-		handle, err := promptRequired(reader, streams.Out, opts.NonInteractive, "Handle (name or email)")
+		handle, err := promptRequired(reader, streams.In, streams.Out, opts.NonInteractive, "Handle (name or email)")
 		if err != nil {
 			return InitResult{}, err
 		}
@@ -168,6 +182,9 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 	if exists {
 		result.ProjectAlreadyConfigured = true
 		result.ProjectConfigPath = existingConfig
+		if existingProject, err := config.ReadProject(existingConfig); err == nil {
+			result.ConfigRevision = existingProject.CloudRevision
+		}
 		result.NextSteps = []string{
 			"Run `propagate team join` if you need to request access for this identity.",
 			"Commit only reviewed metadata changes; never add env values to propagate.yaml.",
@@ -177,9 +194,18 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 		result.Warnings = append(result.Warnings, warnings...)
 		return result, nil
 	}
+	if opts.ExistingProjectOnly {
+		return InitResult{}, commandError(
+			ExitValidationError,
+			"config_missing",
+			"propagate.yaml is required before requesting team access",
+			nil,
+			"Ask an admin to share the repository's Propagate config before running `propagate team join --init`.",
+		)
+	}
 
 	if strings.TrimSpace(opts.TeamName) == "" {
-		teamName, err := promptRequired(reader, streams.Out, opts.NonInteractive, "Team name")
+		teamName, err := promptRequired(reader, streams.In, streams.Out, opts.NonInteractive, "Team name")
 		if err != nil {
 			return InitResult{}, err
 		}
@@ -191,7 +217,7 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 		return InitResult{}, commandError(ExitValidationError, "env_parse_error", "Cannot scan env files safely", err)
 	}
 	result.Warnings = append(result.Warnings, warnings...)
-	result.EnvFilesMapped = summarizeEnvFiles(candidates)
+	result.EnvFilesMapped = summarizeEnvFiles(worktree.Root, candidates)
 	for _, c := range candidates {
 		result.VariablesDiscoveredCount += c.VariableCount
 	}
@@ -199,6 +225,7 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 	if opts.DryRun {
 		result.ProjectCreated = true
 		result.ProjectConfigPath = config.Path(worktree.Root)
+		result.ConfigRevision = config.LocalRevision
 		result.ScopesCreated = scopesFromCandidates(candidates)
 		result.NextSteps = []string{
 			"Re-run without `--dry-run` to create local identity and propagate.yaml.",
@@ -217,7 +244,7 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 		)
 	}
 	if !opts.NonInteractive && !opts.Yes {
-		ok, err := promptConfirm(reader, streams.Out, fmt.Sprintf("Create %s with %d env file mapping(s)?", config.FileName, len(candidates)), true)
+		ok, err := promptConfirm(reader, streams.In, streams.Out, fmt.Sprintf("Create %s with %d env file mapping(s)?", config.FileName, len(candidates)), true)
 		if err != nil {
 			return InitResult{}, err
 		}
@@ -230,7 +257,7 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 	if err != nil {
 		return InitResult{}, commandError(ExitValidationError, "config_invalid", "Cannot build initial project config", err)
 	}
-	if apiURL := resolveAPIURL(opts.APIURL); apiURL != "" {
+	if apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir); apiURL != "" {
 		setupRequest, updatedProject, err := buildTeamSetupRequest(worktree.Root, project, candidates)
 		if err != nil {
 			return InitResult{}, commandError(ExitValidationError, "env_parse_error", "Cannot prepare encrypted initial env upload", err)
@@ -255,14 +282,18 @@ func runInit(opts initOptions, streams Streams) (InitResult, error) {
 	}
 	result.ProjectCreated = true
 	result.ProjectConfigPath = config.Path(worktree.Root)
+	result.ConfigRevision = project.CloudRevision
+	if strings.TrimSpace(result.ConfigRevision) == "" {
+		result.ConfigRevision = config.LocalRevision
+	}
 	if len(result.ScopesCreated) == 0 {
 		for _, scope := range project.Scopes {
 			result.ScopesCreated = append(result.ScopesCreated, scope.Name)
 		}
 	}
 	result.NextSteps = []string{
-		"Review propagate.yaml and confirm it contains metadata only.",
-		"Run `git add propagate.yaml` and commit the setup when ready.",
+		"Review propagate.yaml and run `propagate config edit` to change scope sensitivity, add/delete variables.",
+		"Commit the setup when ready.",
 	}
 	if result.BackendStatus == "not_configured_local_only" {
 		result.NextSteps = append(result.NextSteps, "Set PROPAGATE_API_URL or pass `--api-url` to create the cloud team and upload encrypted values.")
@@ -450,18 +481,43 @@ func mapInitAPIError(err error) error {
 	}
 }
 
-func summarizeEnvFiles(candidates []envfile.Candidate) []EnvFileSummary {
+func summarizeEnvFiles(root string, candidates []envfile.Candidate) []EnvFileSummary {
 	summaries := make([]EnvFileSummary, 0, len(candidates))
 	for _, c := range candidates {
-		summaries = append(summaries, EnvFileSummary{
+		summary := EnvFileSummary{
 			Path:           c.Path,
 			Scope:          c.Scope,
 			Tracked:        c.Tracked,
 			ParentTracked:  c.ParentTracked,
 			VariablesCount: c.VariableCount,
-		})
+		}
+		values, knownValues := maskedInitValues(root, c.Path)
+		for _, name := range c.Variables {
+			variable := InitVariableSummary{Name: name}
+			if knownValues {
+				variable.ValueKnown = true
+				variable.MaskedValue = initMaskValue(values[name])
+			}
+			summary.Variables = append(summary.Variables, variable)
+		}
+		summaries = append(summaries, summary)
 	}
 	return summaries
+}
+
+func maskedInitValues(root, rel string) (map[string]string, bool) {
+	if strings.TrimSpace(root) == "" {
+		return nil, false
+	}
+	absPath, err := repoFilePath(root, rel)
+	if err != nil {
+		return nil, false
+	}
+	assignments, err := envfile.ParseAssignments(absPath)
+	if err != nil {
+		return nil, false
+	}
+	return assignments.Values, true
 }
 
 func scopesFromCandidates(candidates []envfile.Candidate) []string {
@@ -498,7 +554,7 @@ func maybeApplyAgentGuidance(opts initOptions, streams Streams, reader *bufio.Re
 		if opts.NonInteractive {
 			return agents.Result{Status: "skipped"}, nil
 		}
-		ok, err := promptConfirm(reader, streams.Out, "Add Propagate guidance to AGENTS.md?", false)
+		ok, err := promptConfirm(reader, streams.In, streams.Out, "Add Propagate guidance to AGENTS.md?", true)
 		if err != nil {
 			return agents.Result{Status: "skipped"}, []string{err.Error()}
 		}
@@ -513,49 +569,7 @@ func maybeApplyAgentGuidance(opts initOptions, streams Streams, reader *bufio.Re
 	return result, nil
 }
 
-func promptRequired(reader *bufio.Reader, out io.Writer, nonInteractive bool, label string) (string, error) {
-	if nonInteractive {
-		return "", commandError(ExitConfirmationRequired, "confirmation_required", label+" is required in non-interactive mode", nil)
-	}
-	for {
-		fmt.Fprintf(out, "%s: ", label)
-		value, err := reader.ReadString('\n')
-		if err != nil && len(value) == 0 {
-			return "", commandError(ExitUserCanceled, "user_canceled", "Prompt could not read input", err)
-		}
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value, nil
-		}
-		fmt.Fprintln(out, "Please enter a value.")
-	}
-}
-
-func promptConfirm(reader *bufio.Reader, out io.Writer, label string, defaultYes bool) (bool, error) {
-	suffix := " [y/N]: "
-	if defaultYes {
-		suffix = " [Y/n]: "
-	}
-	fmt.Fprint(out, label+suffix)
-	value, err := reader.ReadString('\n')
-	if err != nil && len(value) == 0 {
-		return false, commandError(ExitUserCanceled, "user_canceled", "Prompt could not read input", err)
-	}
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return defaultYes, nil
-	}
-	switch value {
-	case "y", "yes":
-		return true, nil
-	case "n", "no":
-		return false, nil
-	default:
-		return false, commandError(ExitUserCanceled, "user_canceled", "Prompt was not confirmed", nil)
-	}
-}
-
-func renderInitResult(w io.Writer, jsonOutput bool, result InitResult) {
+func renderInitResult(w io.Writer, jsonOutput bool, noColor bool, result InitResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -563,73 +577,231 @@ func renderInitResult(w io.Writer, jsonOutput bool, result InitResult) {
 		return
 	}
 
-	fmt.Fprintln(w, "Propagate init complete.")
-	if result.DryRun {
-		fmt.Fprintln(w, "Mode: dry run; no files were written.")
-	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate init", result.DryRun)
+
+	renderInitIdentity(w, style, result)
 	fmt.Fprintln(w)
 
-	if result.Identity != nil {
-		action := "Using existing"
-		if result.IdentityCreated {
-			action = "Created"
-		}
-		fmt.Fprintf(w, "%s local identity: %s (%s)\n", action, result.Identity.Handle, result.Identity.PublicKeySHA)
-	} else if result.IdentityCreated {
-		fmt.Fprintln(w, "Local identity: would create")
-	}
-	if result.IdentityDir != "" {
-		fmt.Fprintf(w, "Identity directory: %s\n", result.IdentityDir)
+	if result.ProjectAlreadyConfigured {
+		renderInitProject(w, style, result)
+		renderInitAgentGuidance(w, style, result)
+		renderInitFooter(w, style, result)
+		return
 	}
 
+	renderInitEnvScan(w, style, result)
+	renderInitCloud(w, style, result)
+	renderInitProject(w, style, result)
+	renderInitAgentGuidance(w, style, result)
+	renderInitFooter(w, style, result)
+}
+
+func renderInitIdentity(w io.Writer, style initStyle, result InitResult) {
+	fmt.Fprintln(w, "Checking for existing identity...")
+	if result.Identity != nil {
+		if result.IdentityCreated {
+			fmt.Fprintf(w, "%s Keypair generated → %s\n", style.ok(), displayInitPath(result.IdentityPath))
+		} else {
+			fmt.Fprintf(w, "%s Existing keypair found → %s\n", style.ok(), displayInitPath(result.IdentityPath))
+		}
+		fmt.Fprintf(w, "%s Identity set: %s (%s)\n", style.ok(), result.Identity.Handle, result.Identity.PublicKeySHA)
+	} else if result.IdentityCreated {
+		fmt.Fprintf(w, "%s Keypair would be generated → %s\n", style.note(), displayInitPath(result.IdentityPath))
+	} else {
+		fmt.Fprintf(w, "%s Identity unchanged\n", style.note())
+	}
+}
+
+func renderInitEnvScan(w io.Writer, style initStyle, result InitResult) {
+	fmt.Fprintln(w, "Scanning repository for .env files...")
+	if len(result.EnvFilesMapped) == 0 {
+		fmt.Fprintf(w, "%s No .env files discovered; dev scope will be created without files.\n", style.note())
+		return
+	}
+	for _, item := range result.EnvFilesMapped {
+		scope := defaultInitScope(item.Scope)
+		fmt.Fprintf(w, "%s Found %s (%s) scope: %s\n", style.ok(), item.Path, countLabel(item.VariablesCount, "variable"), scope)
+		for _, variable := range item.Variables {
+			fmt.Fprintf(w, "  %s\n", initVariableLine(variable, scope))
+		}
+	}
+}
+
+func renderInitCloud(w io.Writer, style initStyle, result InitResult) {
+	if result.BackendStatus == "created" {
+		fmt.Fprintln(w, initEncryptionLine(result))
+		fmt.Fprintf(w, "%s Uploaded to cloud (%s)\n", style.ok(), countLabel(result.VariablesUploadedCount, "variable"))
+		return
+	}
+	fmt.Fprintln(w, "Preparing cloud upload...")
+	if result.DryRun {
+		fmt.Fprintf(w, "%s Dry run; encrypted upload was not attempted.\n", style.note())
+		return
+	}
+	if result.VariablesDiscoveredCount > 0 {
+		fmt.Fprintf(w, "%s Cloud upload skipped; %s discovered and no API URL configured.\n", style.note(), countLabel(result.VariablesDiscoveredCount, "variable"))
+		return
+	}
+	fmt.Fprintf(w, "%s Cloud upload skipped; no API URL configured.\n", style.note())
+}
+
+func renderInitProject(w io.Writer, style initStyle, result InitResult) {
 	switch {
 	case result.ProjectAlreadyConfigured:
-		fmt.Fprintf(w, "Project config already exists: %s\n", result.ProjectConfigPath)
+		fmt.Fprintln(w, "Checking project config...")
+		if result.ConfigRevision != "" {
+			fmt.Fprintf(w, "%s Project config already exists (%s) → %s\n", style.ok(), result.ConfigRevision, displayInitPath(result.ProjectConfigPath))
+		} else {
+			fmt.Fprintf(w, "%s Project config already exists → %s\n", style.ok(), displayInitPath(result.ProjectConfigPath))
+		}
 	case result.ProjectCreated:
-		action := "Created"
+		fmt.Fprintln(w, "Writing project metadata...")
+		action := "propagate.yaml written"
 		if result.DryRun {
-			action = "Would create"
+			action = "propagate.yaml would be written"
 		}
-		fmt.Fprintf(w, "%s project config: %s\n", action, result.ProjectConfigPath)
+		if result.ConfigRevision != "" {
+			fmt.Fprintf(w, "%s %s (%s) → %s\n", style.ok(), action, result.ConfigRevision, displayInitPath(result.ProjectConfigPath))
+		} else {
+			fmt.Fprintf(w, "%s %s → %s\n", style.ok(), action, displayInitPath(result.ProjectConfigPath))
+		}
 	default:
-		fmt.Fprintln(w, "Project config: unchanged")
+		fmt.Fprintf(w, "%s Project config unchanged\n", style.note())
 	}
+}
 
-	if len(result.ScopesCreated) > 0 {
-		fmt.Fprintf(w, "Scopes: %s\n", strings.Join(result.ScopesCreated, ", "))
-	}
-	if len(result.EnvFilesMapped) > 0 {
-		fmt.Fprintln(w, "Env file mappings:")
-		for _, item := range result.EnvFilesMapped {
-			fmt.Fprintf(w, "  - %s -> %s (%d variable name(s))\n", item.Path, item.Scope, item.VariablesCount)
-		}
-	} else if result.ProjectCreated {
-		fmt.Fprintln(w, "Env file mappings: none discovered; dev scope created without files.")
-	}
-
-	if result.BackendStatus == "created" {
-		fmt.Fprintf(w, "Variables encrypted/uploaded: %d\n", result.VariablesUploadedCount)
-	} else {
-		fmt.Fprintf(w, "Variables encrypted/uploaded: %d (cloud setup not run)\n", result.VariablesUploadedCount)
-	}
-	fmt.Fprintf(w, "Agent guidance: %s", result.AgentGuidance.Status)
-	if result.AgentGuidance.Path != "" {
-		fmt.Fprintf(w, " (%s)", result.AgentGuidance.Path)
-	}
-	fmt.Fprintln(w)
-
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
+func renderInitAgentGuidance(w io.Writer, style initStyle, result InitResult) {
+	fmt.Fprintln(w, "Installing agent guidance...")
+	status := result.AgentGuidance.Status
+	path := displayInitPath(result.AgentGuidance.Path)
+	switch status {
+	case "created":
+		fmt.Fprintf(w, "%s AGENTS.md guidance created → %s\n", style.ok(), path)
+	case "updated":
+		fmt.Fprintf(w, "%s AGENTS.md guidance updated → %s\n", style.ok(), path)
+	case "unchanged":
+		fmt.Fprintf(w, "%s AGENTS.md guidance already up to date → %s\n", style.ok(), path)
+	case "failed":
+		fmt.Fprintf(w, "%s AGENTS.md guidance failed\n", style.warn())
+	case "skipped", "":
+		fmt.Fprintf(w, "%s AGENTS.md guidance skipped\n", style.note())
+	default:
+		if path != "" {
+			fmt.Fprintf(w, "%s AGENTS.md guidance %s → %s\n", style.note(), status, path)
+		} else {
+			fmt.Fprintf(w, "%s AGENTS.md guidance %s\n", style.note(), status)
 		}
 	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
+}
+
+func renderInitFooter(w io.Writer, style initStyle, result InitResult) {
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
+}
+
+func initVariableLine(variable InitVariableSummary, scope string) string {
+	parts := []string{variable.Name}
+	if variable.ValueKnown {
+		masked := variable.MaskedValue
+		if masked == "" {
+			masked = "<empty>"
+		}
+		parts = append(parts, masked)
+	}
+	parts = append(parts, "scope: "+scope)
+	return strings.Join(parts, " ")
+}
+
+func initMaskValue(value string) string {
+	switch len(value) {
+	case 0:
+		return ""
+	case 1:
+		return "**"
+	case 2:
+		return value[:1] + "**"
+	default:
+		return value[:1] + "**" + value[len(value)-1:]
+	}
+}
+
+func initEncryptionLine(result InitResult) string {
+	counts := initScopeCounts(result.EnvFilesMapped)
+	total := result.VariablesDiscoveredCount
+	if total == 0 {
+		for _, count := range counts {
+			total += count.Variables
 		}
 	}
+	switch len(counts) {
+	case 0:
+		return "Creating cloud team..."
+	case 1:
+		return fmt.Sprintf("Encrypting %s for scope: %s...", countLabel(counts[0].Variables, "variable"), counts[0].Scope)
+	default:
+		return fmt.Sprintf("Encrypting %s across %s...", countLabel(total, "variable"), countLabel(len(counts), "scope"))
+	}
+}
+
+type initScopeCount struct {
+	Scope     string
+	Variables int
+}
+
+func initScopeCounts(files []EnvFileSummary) []initScopeCount {
+	counts := map[string]int{}
+	for _, file := range files {
+		counts[defaultInitScope(file.Scope)] += file.VariablesCount
+	}
+	ordered := []string{"dev", "staging", "prod", "other"}
+	var out []initScopeCount
+	for _, scope := range ordered {
+		if count, ok := counts[scope]; ok {
+			out = append(out, initScopeCount{Scope: scope, Variables: count})
+			delete(counts, scope)
+		}
+	}
+	var extra []initScopeCount
+	for scope, count := range counts {
+		extra = append(extra, initScopeCount{Scope: scope, Variables: count})
+	}
+	sort.Slice(extra, func(i, j int) bool {
+		return extra[i].Scope < extra[j].Scope
+	})
+	out = append(out, extra...)
+	return out
+}
+
+func defaultInitScope(scope string) string {
+	if strings.TrimSpace(scope) == "" {
+		return "dev"
+	}
+	return scope
+}
+
+func countLabel(count int, singular string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %ss", count, singular)
+}
+
+func displayInitPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "(unknown)"
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		rel, err := filepath.Rel(home, path)
+		if err == nil && rel == "." {
+			return "~"
+		}
+		if err == nil && rel != "" && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			return filepath.ToSlash(filepath.Join("~", rel))
+		}
+	}
+	return filepath.ToSlash(path)
 }
 
 func printInitHelp(w io.Writer) {
@@ -645,4 +817,5 @@ func printInitHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --skip-agent-guidance    skip AGENTS.md guidance")
 	fmt.Fprintln(w, "  --json                   render machine-readable JSON")
 	fmt.Fprintln(w, "  --non-interactive        fail instead of prompting")
+	fmt.Fprintln(w, "  --no-color               disable terminal color")
 }

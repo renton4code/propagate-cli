@@ -145,11 +145,13 @@ function TerminalLineRow({
   const text     = state.text ?? "";
   const isCheck  = text.startsWith("✓");
   const isWarn   = text.startsWith("!");
+  const isNote   = text.startsWith("•");
   const isIndent = text.startsWith("  ");
 
   const color =
     line.kind === "cmd" ? "#fff"    :
     isCheck              ? "#FFE500" :
+    isNote               ? "#7dd3fc" :
     isWarn               ? "#ff9944" :
     isIndent             ? "#888"    :
                            "#fff";
@@ -162,7 +164,15 @@ function TerminalLineRow({
       {line.kind === "cmd" && (
         <span style={{ color: "var(--primary)", marginRight: "0.5ch", flexShrink: 0 }}>$</span>
       )}
-      <span style={{ color, opacity: line.kind === "output" ? 0.9 : 1 }}>
+      <span
+        style={{
+          color,
+          opacity: line.kind === "output" ? 0.9 : 1,
+          minWidth: 0,
+          overflowWrap: "anywhere",
+          whiteSpace: "pre-wrap",
+        }}
+      >
         {text}
         {hasCursor && <Caret />}
       </span>
@@ -349,11 +359,12 @@ export function TerminalFlow({ terminals }: { terminals: TerminalDef[] }) {
 
       const rawIndex = progress * n;
       const index    = Math.min(Math.floor(rawIndex), n - 1);
-      const phase    = rawIndex - Math.floor(rawIndex);
+      const phase    = Math.min(1, Math.max(0, rawIndex - index));
+      const isLast   = index === n - 1;
 
       const opacity =
         index === 0 && phase < 0.05 ? phase / 0.05 :
-        phase > 0.93                ? Math.max(0, 1 - (phase - 0.93) / 0.07) :
+        !isLast && phase > 0.93     ? Math.max(0, 1 - (phase - 0.93) / 0.07) :
         1;
 
       setView(prev => {
@@ -383,7 +394,8 @@ export function TerminalFlow({ terminals }: { terminals: TerminalDef[] }) {
   }, [n]);
 
   const { index, phase, opacity } = view;
-  const slideY = phase > 0.93 ? ((phase - 0.93) / 0.07) * 20 : 0;
+  const isLast = index === n - 1;
+  const slideY = !isLast && phase > 0.93 ? ((phase - 0.93) / 0.07) * 20 : 0;
 
   return (
     <div ref={wrapperRef} style={{ position: "relative", height: `${n * SCROLL_PER_TERMINAL}vh` }}>

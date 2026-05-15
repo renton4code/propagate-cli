@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"propagate/cli/internal/apiclient"
@@ -22,9 +23,11 @@ import (
 
 type envSetOptions struct {
 	globalOptions
-	Scope  string
-	DryRun bool
-	Yes    bool
+	Scope         string
+	ScopeProvided bool
+	DryRun        bool
+	Yes           bool
+	ValueStdin    bool
 }
 
 type EnvSetResult struct {
@@ -50,18 +53,19 @@ type EnvSetResult struct {
 }
 
 func runEnvSetCommand(args []string, global globalOptions, streams Streams) int {
-	opts := envSetOptions{globalOptions: global, Scope: "dev"}
+	opts := envSetOptions{globalOptions: global}
 	fs := flag.NewFlagSet("env set", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addGlobalFlags(fs, &opts.globalOptions)
-	fs.StringVar(&opts.Scope, "scope", "dev", "scope to update")
+	fs.StringVar(&opts.Scope, "scope", "", "scope to update")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate and show the single-value update plan without uploading")
 	fs.BoolVar(&opts.Yes, "yes", false, "confirm uploading the encrypted value update")
+	fs.BoolVar(&opts.ValueStdin, "value-stdin", false, "read the single-line value from stdin instead of prompting")
 
 	flagArgs, variable, showHelp, splitErr := splitEnvSetArgs(args)
 	if splitErr != nil {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate env set requires exactly one variable name and never accepts the value as an argument", splitErr, "Run `propagate env set NAME --scope dev`; Propagate will prompt for the value.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if showHelp {
 		printEnvSetHelp(streams.Out)
@@ -73,20 +77,25 @@ func runEnvSetCommand(args []string, global globalOptions, streams Streams) int 
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid env set flags", err, "Run `propagate env set --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "scope" {
+			opts.ScopeProvided = true
+		}
+	})
 	if fs.NArg() != 0 || variable == "" {
 		message := "propagate env set requires exactly one variable name and never accepts the value as an argument"
 		next := "Run `propagate env set NAME --scope dev`; Propagate will prompt for the value."
 		cmdErr := commandError(ExitUsageError, "usage_error", message, nil, next)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runEnvSet(opts, variable, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderEnvSetResult(streams.Out, opts.JSON, result)
+	renderEnvSetResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -135,32 +144,23 @@ func flagConsumesNext(arg string) bool {
 
 func runEnvSet(opts envSetOptions, variable string, streams Streams) (EnvSetResult, error) {
 	reader := bufio.NewReader(streams.In)
-	scopeName := strings.TrimSpace(opts.Scope)
-	if scopeName == "" {
-		scopeName = "dev"
-	}
-	if err := config.ValidateScopeName(scopeName); err != nil {
-		return EnvSetResult{}, commandError(ExitUsageError, "usage_error", "Invalid env set scope", err)
-	}
 	variable = strings.TrimSpace(variable)
 	if err := envfile.ValidateVariableName(variable); err != nil {
 		return EnvSetResult{}, commandError(ExitUsageError, "usage_error", "Invalid env set variable name", err)
 	}
-	if opts.NonInteractive {
-		return EnvSetResult{}, commandError(ExitConfirmationRequired, "confirmation_required", "env set requires an interactive value prompt", nil, "Run `propagate env set NAME` in an interactive terminal. `--yes` does not provide the value.")
+	if opts.NonInteractive && !opts.ValueStdin {
+		return EnvSetResult{}, commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive env set requires --value-stdin for the value", nil, "Pipe a single-line value into `propagate env set NAME --value-stdin --yes --non-interactive`.")
 	}
-	if scopeName == "prod" && !opts.Yes {
-		ok, err := promptConfirm(reader, streams.Out, "Set a prod env value in the encrypted cloud store?", false)
+	if opts.ValueStdin && !opts.Yes && !opts.DryRun {
+		return EnvSetResult{}, commandError(ExitConfirmationRequired, "confirmation_required", "env set with --value-stdin requires --yes before upload", nil, "Re-run with `--yes` after reviewing `propagate env set NAME --dry-run --value-stdin`.")
+	}
+	var value string
+	if opts.ValueStdin {
+		var err error
+		value, err = readEnvSetValueFromStdin(streams.In)
 		if err != nil {
 			return EnvSetResult{}, err
 		}
-		if !ok {
-			return EnvSetResult{}, commandError(ExitUserCanceled, "user_canceled", "Env set was canceled before reading a value", nil)
-		}
-	}
-	value, err := promptEnvSetValue(reader, streams.In, streams.Out, variable)
-	if err != nil {
-		return EnvSetResult{}, err
 	}
 
 	result := EnvSetResult{
@@ -168,7 +168,6 @@ func runEnvSet(opts envSetOptions, variable string, streams Streams) (EnvSetResu
 		Command:       "env set",
 		Status:        "success",
 		DryRun:        opts.DryRun,
-		Scope:         scopeName,
 		Variable:      variable,
 		BackendStatus: "not_contacted",
 	}
@@ -200,12 +199,29 @@ func runEnvSet(opts envSetOptions, variable string, streams Streams) (EnvSetResu
 	result.TeamID = project.TeamID
 	result.TeamName = project.TeamName
 
-	localScope := findScopeSummary(project.Scopes, scopeName)
-	if localScope == nil {
-		return EnvSetResult{}, commandError(ExitValidationError, "scope_not_found", fmt.Sprintf("Scope %q is not configured in propagate.yaml", scopeName), nil, "Run `propagate config pull` if the scope was added in the cloud.")
+	scopeName, localScope, err := resolveEnvSetScope(reader, streams.In, streams.Out, opts, project)
+	if err != nil {
+		return EnvSetResult{}, err
+	}
+	result.Scope = scopeName
+
+	if scopeName == "prod" && !opts.Yes && !opts.DryRun {
+		ok, err := promptConfirm(reader, streams.In, streams.Out, "Set a prod env value in the encrypted cloud store?", false)
+		if err != nil {
+			return EnvSetResult{}, err
+		}
+		if !ok {
+			return EnvSetResult{}, commandError(ExitUserCanceled, "user_canceled", "Env set was canceled before reading a value", nil)
+		}
+	}
+	if !opts.ValueStdin {
+		value, err = promptEnvSetValue(reader, streams.In, streams.Out, variable)
+		if err != nil {
+			return EnvSetResult{}, err
+		}
 	}
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return EnvSetResult{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for env set", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
@@ -273,7 +289,10 @@ func runEnvSet(opts envSetOptions, variable string, streams Streams) (EnvSetResu
 		return result, nil
 	}
 	if !opts.Yes {
-		ok, err := promptConfirm(reader, streams.Out, fmt.Sprintf("Upload encrypted %s value for %s in %s?", result.ChangeType, variable, scopeName), false)
+		if opts.NonInteractive || opts.ValueStdin {
+			return EnvSetResult{}, commandError(ExitConfirmationRequired, "confirmation_required", "env set requires --yes before uploading encrypted value changes", nil, "Re-run with `--yes` after reviewing `propagate env set NAME --dry-run`.")
+		}
+		ok, err := promptConfirm(reader, streams.In, streams.Out, fmt.Sprintf("Upload encrypted %s value for %s in %s?", result.ChangeType, variable, scopeName), false)
 		if err != nil {
 			return EnvSetResult{}, err
 		}
@@ -396,7 +415,100 @@ func chooseEnvSetPath(local []string, cloud []string) string {
 	return ""
 }
 
+func resolveEnvSetScope(reader *bufio.Reader, in io.Reader, out io.Writer, opts envSetOptions, project config.ParsedProject) (string, *config.ScopeSummary, error) {
+	if opts.ScopeProvided {
+		scopeName := strings.TrimSpace(opts.Scope)
+		if scopeName == "" {
+			scopeName = "dev"
+		}
+		if err := config.ValidateScopeName(scopeName); err != nil {
+			return "", nil, commandError(ExitUsageError, "usage_error", "Invalid env set scope", err)
+		}
+		localScope := findScopeSummary(project.Scopes, scopeName)
+		if localScope == nil {
+			return "", nil, commandError(ExitValidationError, "scope_not_found", fmt.Sprintf("Scope %q is not configured in propagate.yaml", scopeName), nil, "Run `propagate config pull` if the scope was added in the cloud.")
+		}
+		return scopeName, localScope, nil
+	}
+	switch len(project.Scopes) {
+	case 0:
+		return "", nil, commandError(ExitValidationError, "scope_not_found", "No scopes are configured in propagate.yaml", nil, "Run `propagate scope create dev` or pull the latest config.")
+	case 1:
+		return project.Scopes[0].Name, &project.Scopes[0], nil
+	default:
+		if opts.NonInteractive {
+			return "", nil, commandError(ExitConfirmationRequired, "confirmation_required", "env set requires --scope when multiple scopes are configured in non-interactive mode", nil, "Re-run with `--scope NAME` after choosing the target scope.")
+		}
+		scopeName, err := promptEnvSetScope(reader, in, out, project.Scopes)
+		if err != nil {
+			return "", nil, err
+		}
+		localScope := findScopeSummary(project.Scopes, scopeName)
+		if localScope == nil {
+			return "", nil, commandError(ExitValidationError, "scope_not_found", fmt.Sprintf("Scope %q is not configured in propagate.yaml", scopeName), nil)
+		}
+		return scopeName, localScope, nil
+	}
+}
+
+func promptEnvSetScope(reader *bufio.Reader, in io.Reader, out io.Writer, scopes []config.ScopeSummary) (string, error) {
+	if promptCanUseTUI(in, out) {
+		choices := make([]tuiChoice, 0, len(scopes))
+		defaultIndex := 0
+		for idx, scope := range scopes {
+			if scope.Name == "dev" {
+				defaultIndex = idx
+			}
+			choices = append(choices, tuiChoice{
+				Key:         strconv.Itoa(idx + 1),
+				Label:       scope.Name,
+				Description: envSetScopeDescription(scope),
+				Value:       scope.Name,
+			})
+		}
+		return promptChoiceTUI(in, out, "Choose scope for env set", []string{"Multiple scopes are configured."}, choices, defaultIndex)
+	}
+	fmt.Fprintln(out, "Scopes:")
+	for idx, scope := range scopes {
+		description := envSetScopeDescription(scope)
+		if description != "" {
+			fmt.Fprintf(out, "  %d. %s (%s)\n", idx+1, scope.Name, description)
+		} else {
+			fmt.Fprintf(out, "  %d. %s\n", idx+1, scope.Name)
+		}
+	}
+	for {
+		input, err := promptOptional(reader, in, out, "Choose scope number or name")
+		if err != nil {
+			return "", err
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return "", commandError(ExitUserCanceled, "user_canceled", "Env set scope selection was canceled", nil)
+		}
+		if number, err := strconv.Atoi(input); err == nil && number >= 1 && number <= len(scopes) {
+			return scopes[number-1].Name, nil
+		}
+		for _, scope := range scopes {
+			if scope.Name == input {
+				return scope.Name, nil
+			}
+		}
+		fmt.Fprintln(out, "Choose a listed scope number or name.")
+	}
+}
+
+func envSetScopeDescription(scope config.ScopeSummary) string {
+	if len(scope.EnvFiles) == 0 {
+		return "no env files"
+	}
+	return "env files: " + strings.Join(scope.EnvFiles, ", ")
+}
+
 func promptEnvSetValue(reader *bufio.Reader, in io.Reader, out io.Writer, variable string) (string, error) {
+	if promptCanUseTUI(in, out) {
+		return promptHiddenText(in, out, "Value for "+variable, true)
+	}
 	fmt.Fprintf(out, "Value for %s: ", variable)
 	if file, ok := in.(*os.File); ok && isCharDevice(file) {
 		if err := setTerminalEcho(file, false); err != nil {
@@ -414,6 +526,27 @@ func promptEnvSetValue(reader *bufio.Reader, in io.Reader, out io.Writer, variab
 	value = strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r")
 	if strings.ContainsAny(value, "\r\n") {
 		return "", commandError(ExitValidationError, "validation_failed", "Env set only accepts a single-line value", nil)
+	}
+	return value, nil
+}
+
+const maxEnvSetValueStdinBytes = 1 << 20
+
+func readEnvSetValueFromStdin(in io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(in, maxEnvSetValueStdinBytes+1))
+	if err != nil {
+		return "", commandError(ExitUserCanceled, "user_canceled", "Could not read env value from stdin", err)
+	}
+	if len(data) > maxEnvSetValueStdinBytes {
+		return "", commandError(ExitValidationError, "validation_failed", "Env set stdin value is too large", nil)
+	}
+	if len(data) == 0 {
+		return "", commandError(ExitValidationError, "validation_failed", "Env set --value-stdin requires input", nil, "Pass a single newline to intentionally set an empty value.")
+	}
+	value := string(data)
+	value = strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r")
+	if strings.ContainsAny(value, "\r\n") {
+		return "", commandError(ExitValidationError, "validation_failed", "Env set only accepts a single-line value from stdin", nil)
 	}
 	return value, nil
 }
@@ -436,20 +569,22 @@ func setTerminalEcho(file *os.File, enabled bool) error {
 	return cmd.Run()
 }
 
-func renderEnvSetResult(w io.Writer, jsonOutput bool, result EnvSetResult) {
+func renderEnvSetResult(w io.Writer, jsonOutput bool, noColor bool, result EnvSetResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate env set", result.DryRun)
 	switch result.Status {
 	case "dry_run":
-		fmt.Fprintln(w, "Env set dry run complete.")
+		renderNote(w, style, "Env set dry run complete.")
 	case "no_change":
-		fmt.Fprintln(w, "Env value already matches the cloud.")
+		renderNote(w, style, "Env value already matches the cloud.")
 	default:
-		fmt.Fprintln(w, "Env set complete.")
+		renderOK(w, style, "Env set complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -471,18 +606,8 @@ func renderEnvSetResult(w io.Writer, jsonOutput bool, result EnvSetResult) {
 	}
 	fmt.Fprintf(w, "New versions uploaded: %d\n", result.NewVersionsCount)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
 func printEnvSetHelp(w io.Writer) {
@@ -490,9 +615,10 @@ func printEnvSetHelp(w io.Writer) {
 	fmt.Fprintln(w, "  propagate env set NAME [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
-	fmt.Fprintln(w, "  --scope VALUE       scope to update (default dev)")
+	fmt.Fprintln(w, "  --scope VALUE       scope to update; prompts when omitted and multiple scopes exist")
 	fmt.Fprintln(w, "  --dry-run           validate and show the update plan without upload")
 	fmt.Fprintln(w, "  --yes               confirm uploading the encrypted value update")
+	fmt.Fprintln(w, "  --value-stdin       read the single-line value from stdin instead of prompting")
 	fmt.Fprintln(w, "  --api-url VALUE     override Propagate API URL")
 	fmt.Fprintln(w, "  --json              render machine-readable JSON")
 	fmt.Fprintln(w, "  --non-interactive   fail instead of prompting")

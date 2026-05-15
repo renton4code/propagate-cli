@@ -88,11 +88,11 @@ func runTeamStatusCommand(args []string, global globalOptions, streams Streams) 
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid team status flags", err, "Run `propagate team status --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate team status does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runTeamStatus(opts, streams)
@@ -102,11 +102,11 @@ func runTeamStatusCommand(args []string, global globalOptions, streams Streams) 
 				renderTeamStatusError(streams.Err, result, err)
 				return errorExitCode(err)
 			}
-			renderTeamStatusResult(streams.Out, false, result)
+			renderTeamStatusResult(streams.Out, false, opts.NoColor, result)
 		}
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderTeamStatusResult(streams.Out, opts.JSON, result)
+	renderTeamStatusResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -166,7 +166,7 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	result.Identity = &statusIdentity
 	result.CurrentRole = localMemberRole(project, summary.PublicKeySHA)
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		result.OK = false
 		result.Status = "cloud_unavailable"
@@ -436,7 +436,7 @@ func mapTeamStatusAPIError(err error, project config.ParsedProject, summary iden
 	}
 }
 
-func renderTeamStatusResult(w io.Writer, jsonOutput bool, result TeamStatusResult) {
+func renderTeamStatusResult(w io.Writer, jsonOutput bool, noColor bool, result TeamStatusResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -444,15 +444,17 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, result TeamStatusResul
 		return
 	}
 
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate team status", false)
 	switch result.Status {
 	case "cloud_unavailable":
-		fmt.Fprintln(w, "Team local status available; cloud activity unavailable.")
+		renderWarning(w, style, "Team local status available; cloud activity unavailable.")
 	case "identity_missing":
-		fmt.Fprintln(w, "Team local status available; identity is missing.")
+		renderWarning(w, style, "Team local status available; identity is missing.")
 	case "permission_denied":
-		fmt.Fprintln(w, "Team local status available; cloud activity denied.")
+		renderWarning(w, style, "Team local status available; cloud activity denied.")
 	default:
-		fmt.Fprintln(w, "Team status complete.")
+		renderOK(w, style, "Team status complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -471,35 +473,25 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, result TeamStatusResul
 	fmt.Fprintf(w, "Audit available: %t\n", result.AuditAvailable)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 
-	renderTeamMembers(w, result.Members)
-	renderPendingJoins(w, result.PendingJoins)
-	renderTeamStatusList(w, "Pending access changes", result.PendingAccessChanges)
+	renderTeamMembers(w, style, result.Members)
+	renderPendingJoins(w, style, result.PendingJoins)
+	renderTeamStatusList(w, style, "Pending access changes", result.PendingAccessChanges)
 	if len(result.PendingOrRecentAccess) > 0 {
-		fmt.Fprintln(w, "\nCloud pending/recent access:")
+		fmt.Fprintf(w, "\n%s\n", style.bold("Cloud pending/recent access:"))
 		fmt.Fprintf(w, "- %s\n", string(result.PendingOrRecentAccess))
 	}
-	renderPullActivity(w, result.LastPulls)
-	renderNeverPulled(w, result.NeverPulled)
+	renderPullActivity(w, style, result.LastPulls)
+	renderNeverPulled(w, style, result.NeverPulled)
 
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
-func renderTeamMembers(w io.Writer, members map[string][]TeamMember) {
+func renderTeamMembers(w io.Writer, style outputStyle, members map[string][]TeamMember) {
 	if countTeamMembers(members) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nMembers:")
+	fmt.Fprintf(w, "\n%s\n", style.bold("Members:"))
 	for _, role := range orderedTeamRoles(members) {
 		fmt.Fprintf(w, "  %s:\n", role)
 		for _, member := range members[role] {
@@ -512,11 +504,11 @@ func renderTeamMembers(w io.Writer, members map[string][]TeamMember) {
 	}
 }
 
-func renderPendingJoins(w io.Writer, joins []TeamPendingJoin) {
+func renderPendingJoins(w io.Writer, style outputStyle, joins []TeamPendingJoin) {
 	if len(joins) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nPending join requests:")
+	fmt.Fprintf(w, "\n%s\n", style.bold("Pending join requests:"))
 	for _, join := range joins {
 		line := memberLabel(join.Handle, join.PublicKeySHA)
 		if join.RequestedRole != "" {
@@ -532,11 +524,11 @@ func renderPendingJoins(w io.Writer, joins []TeamPendingJoin) {
 	}
 }
 
-func renderPullActivity(w io.Writer, pulls []TeamPullActivity) {
+func renderPullActivity(w io.Writer, style outputStyle, pulls []TeamPullActivity) {
 	if len(pulls) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nLast pulls:")
+	fmt.Fprintf(w, "\n%s\n", style.bold("Last pulls:"))
 	for _, pull := range pulls {
 		line := memberLabel(pull.Handle, pull.MemberPublicKeySHA)
 		if pull.Scope != "" {
@@ -549,24 +541,18 @@ func renderPullActivity(w io.Writer, pulls []TeamPullActivity) {
 	}
 }
 
-func renderNeverPulled(w io.Writer, members []TeamMember) {
+func renderNeverPulled(w io.Writer, style outputStyle, members []TeamMember) {
 	if len(members) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nNever pulled:")
+	fmt.Fprintf(w, "\n%s\n", style.bold("Never pulled:"))
 	for _, member := range members {
 		fmt.Fprintf(w, "- %s\n", memberLabel(member.Handle, member.PublicKeySHA))
 	}
 }
 
-func renderTeamStatusList(w io.Writer, label string, values []string) {
-	if len(values) == 0 {
-		return
-	}
-	fmt.Fprintf(w, "\n%s:\n", label)
-	for _, value := range values {
-		fmt.Fprintf(w, "- %s\n", value)
-	}
+func renderTeamStatusList(w io.Writer, style outputStyle, label string, values []string) {
+	renderListSection(w, style, label, values)
 }
 
 func orderedTeamRoles(members map[string][]TeamMember) []string {

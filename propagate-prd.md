@@ -75,7 +75,7 @@ A scope represents a logical environment. Default supported scopes:
 - `prod`
 - `other`
 
-Users may define custom scopes under `other`.
+Users may define additional custom scopes. Scope names should be lowercase and CLI-safe, such as `qa`, `preview`, or `demo`.
 
 Each scope has:
 
@@ -84,6 +84,8 @@ Each scope has:
 - Access rules by role or member.
 - Pull history.
 
+A scope may initially be empty. Teams can create the scope metadata first, review and push it, then move existing variable declarations into it or add new variables later.
+
 ### 4.4 Config File
 
 The project config file is `propagate.yaml`.
@@ -91,6 +93,8 @@ The project config file is `propagate.yaml`.
 It is committed to Git and contains project/team metadata, member public keys, pending requests, scopes, env file mappings, and variable declarations.
 
 Each variable declaration records the env file path, variable name, sensitivity, and a safe representation of the current value. Variables are `sensitive` by default and must be represented by a keyed digest such as `hmac-sha-256:v1:...`; raw SHA-256 is not acceptable because low-entropy secrets can be cracked offline. A variable may be explicitly marked `non_sensitive`. Non-sensitive values may be stored directly only when they fit on one short line; otherwise the config stores a short preview such as `aaa...zzz` plus the keyed digest.
+
+Variable declaration edits are metadata-only. Changing a declaration's sensitivity, scope, or presence in `propagate.yaml` must not read local env values, decrypt cloud values, or write plaintext values into the config.
 
 ## 5. User Roles
 
@@ -103,6 +107,8 @@ Admins can:
 - Approve role and scope changes.
 - Push local config state to the cloud.
 - Pull cloud config state.
+- Create empty scope metadata for review and config push.
+- Edit local variable declaration metadata before review and config push.
 - Push environment variable updates for scopes they can write.
 - Set individual environment variable values for scopes they can write.
 - View team status and last pull events.
@@ -115,6 +121,8 @@ Developers can:
 - Request to join a project team.
 - Pull environment variables for scopes they can read.
 - Request access changes through config diffs.
+- Propose new scope metadata through reviewable config diffs.
+- Edit local variable declaration metadata for reviewable config diffs.
 - Push environment variable changes and set individual values only for scopes they can write.
 
 ### 5.3 Future Roles
@@ -127,6 +135,27 @@ Potential future roles:
 - Production agent: non-human identity for runtime secret retrieval.
 
 ## 6. MVP Commands
+
+### 6.0 Shared Human Output Requirements
+
+All non-JSON command output should use one consistent Propagate style so users and tool agents can scan any command the same way.
+
+Human-readable output should:
+
+- Start with a bold command title, such as `Propagate init`, `Propagate config status`, or `Propagate env pull`.
+- Add `(dry run)` to the title for dry-run executions.
+- Use semantic status markers consistently:
+  - `✓` for completed or successful actions.
+  - `•` for informational notes, skipped actions, no-op states, and dry-run summaries.
+  - `!` for warnings and recoverable degraded states.
+- Use colored markers and section headings by default.
+- Respect `--no-color` by removing ANSI color while keeping the same text, markers, and layout.
+- Keep `--json` output machine-readable and free of ANSI color, decorative symbols, or terminal-only layout.
+- Render `Warnings:` and `Next steps:` with the same section style across commands and errors.
+- Keep common list sections visually consistent, including `Files:`, `Changes:`, `Members:`, `Variables:`, `Requested scopes:`, `Env files:`, and `Default access:`.
+- Never print plaintext env values in human output, JSON output, errors, warnings, next steps, or panic paths.
+
+Help and version output may remain plain and script-friendly.
 
 ### 6.1 `propagate init`
 
@@ -200,18 +229,23 @@ Adds the current user as a pending invite/request in `propagate.yaml`.
 
 #### Behavior
 
-1. Ensure local identity exists. If not, run the identity portion of `propagate init`.
-2. Read `propagate.yaml`.
-3. Add a pending join request containing:
+1. Ensure local identity exists. If not, create the identity using the same local identity behavior as `propagate init`.
+2. If `--init` is provided, run the existing-project portion of `propagate init` first:
+   - Create or load the local identity.
+   - Confirm that `propagate.yaml` already exists.
+   - Offer or apply AI agent guidance using the same guidance behavior as `propagate init`.
+   - Do not create a new project config or overwrite an existing config.
+3. Read `propagate.yaml`.
+4. Add a pending join request containing:
    - Public key SHA.
    - Full public key.
    - Handle.
    - Requested role: `developers`.
    - Requested scopes, if specified.
    - Timestamp.
-4. Save the config file.
-5. Notify the user explicitly that this only creates a Git-reviewed access request.
-6. Tell the user to commit the config diff, open a pull request, and ask an admin to approve it.
+5. Save the config file.
+6. Notify the user explicitly that this only creates a Git-reviewed access request.
+7. Tell the user to commit the config diff, open a pull request, and ask an admin to approve it.
 
 #### Notes
 
@@ -219,11 +253,26 @@ The join request is Git-mediated. This lets teams review membership changes in p
 
 The CLI output must make this workflow clear. It should not imply that the user has joined the team or received secret access yet.
 
+The existing two-command flow remains supported:
+
+```bash
+propagate init --handle bob@example.com
+propagate team join --scope dev=read
+```
+
+For an already configured repository, a developer can combine existing-project init and the join request in one command:
+
+```bash
+propagate team join --init --handle bob@example.com --scope dev=read
+```
+
 Example output:
 
 ```text
-Join request added to propagate.yaml.
-You do not have secret access yet.
+Propagate team join
+
+✓ Join request added to propagate.yaml.
+• You do not have secret access yet.
 
 Next steps:
 1. Commit this config change.
@@ -252,16 +301,20 @@ Synchronizes the local `propagate.yaml` state with the cloud.
 7. For approved members/scopes:
    - Encrypt relevant scope keys for the member public key.
    - Upload encrypted access envelopes to the cloud.
-8. For declined items:
+8. If the config adds new scopes:
+   - Generate a fresh scope key for each new scope.
+   - Encrypt that scope key for each active member who should have read access under the target config's default role access.
+   - Upload encrypted access envelopes with the config push.
+9. For declined items:
    - Do not grant cloud access.
    - Remove the item from the pending section of `propagate.yaml`.
    - Record the decline in local config history or cloud audit events.
-9. For skipped items:
+10. For skipped items:
    - Leave the item pending in `propagate.yaml`.
    - Do not push any access change for that item.
-10. Push accepted and declined config decisions to the cloud.
-11. Update local `propagate.yaml` so it reflects the actual decisions made.
-12. Update local config revision metadata.
+11. Push accepted and declined config decisions to the cloud.
+12. Update local `propagate.yaml` so it reflects the actual decisions made.
+13. Update local config revision metadata.
 
 #### Output Requirements
 
@@ -274,7 +327,7 @@ The command output must explicitly summarize all decisions:
 - Approved scope changes.
 - Declined scope changes.
 - Skipped items that remain pending.
-- Encrypted access envelopes uploaded.
+- Encrypted access envelopes uploaded, including envelopes for newly created scopes.
 - Whether `propagate.yaml` was modified.
 
 #### Access Control
@@ -307,7 +360,105 @@ Shows whether local config differs from cloud config.
 - Cloud-only changes.
 - Whether `propagate config push` or `propagate config pull` is recommended.
 
-### 6.6 `propagate env pull`
+### 6.6 `propagate scope create`
+
+Creates an empty scope in local `propagate.yaml` for Git review and later config push.
+
+#### Usage
+
+```bash
+propagate scope create staging
+propagate scope create preview --env-file .env.preview
+propagate scope create qa --dry-run
+```
+
+#### Behavior
+
+1. Read local `propagate.yaml`.
+2. Validate that the requested scope name is supported and not already present.
+3. Validate any provided `--env-file` mappings as repository-relative paths inside the worktree.
+4. Add a scope with:
+   - The requested scope name.
+   - Empty `env_files` unless `--env-file` is supplied.
+   - No variable declarations.
+   - Default role access: `admins: write`; non-`prod` scopes also default to `developers: read`.
+5. Validate the resulting config before writing it.
+6. Save the edited `propagate.yaml`, unless `--dry-run` is used.
+7. Do not prompt for source scopes or clone metadata during scope creation.
+8. Suggest `propagate config status`, `propagate config edit`, `propagate config push`, and `propagate env push`.
+
+#### Safety Requirements
+
+- Must not read local env file values.
+- Must not prompt for or store env values.
+- Must not copy env file mappings or variable declarations from another scope.
+- Must not decrypt cloud env values.
+- Must not upload or delete encrypted cloud values directly.
+- Must not write plaintext env values, masked values, private keys, or raw plaintext hashes to `propagate.yaml`.
+- Must reject duplicate scope names.
+- If no env file mapping is supplied, output must explain that an env file mapping is needed before seeding values into the new scope.
+
+#### Publishing Requirements
+
+`propagate scope create` is local metadata only. The new scope becomes cloud-visible after an admin runs `propagate config push`.
+
+When publishing a new scope, `propagate config push` must create a fresh scope key and upload encrypted scope key envelopes for authorized active members. The server must never receive the plaintext scope key.
+
+Users should run `propagate config edit` to add env file mappings or move declaration metadata into the new scope before publishing. Users seed values after publication through existing env workflows.
+
+#### Output Requirements
+
+- Scope name.
+- Env file mappings, if any.
+- Default role access.
+- Whether `propagate.yaml` was modified.
+- Next steps for publishing metadata and seeding values through existing env workflows.
+
+### 6.7 `propagate config edit`
+
+Opens an interactive local editor for safe variable declaration metadata in `propagate.yaml`.
+
+#### Usage
+
+```bash
+propagate config edit
+propagate config edit --dry-run
+```
+
+#### Behavior
+
+1. Read local `propagate.yaml`.
+2. List existing variable declarations by scope, env file path, variable name, and sensitivity.
+3. Let the user edit each declaration's metadata:
+   - Toggle sensitivity between `sensitive` and `non_sensitive`.
+   - Move the declaration to another existing scope.
+   - Remove the declaration from config metadata.
+4. If a declaration is moved to a scope that does not yet list the declaration's env file path, add that env file mapping to the target scope and show it in the summary.
+5. Validate the resulting config before writing it.
+6. Save the edited `propagate.yaml`, unless `--dry-run` is used.
+7. Suggest `propagate config status` and `propagate config push` after review.
+
+#### Safety Requirements
+
+- Must not read local env file values.
+- Must not decrypt cloud env values.
+- Must not upload or delete encrypted cloud values.
+- Must not write plaintext env values, masked values, or raw plaintext hashes to `propagate.yaml`.
+- Switching a declaration from `non_sensitive` back to `sensitive` must remove any literal or preview metadata.
+- Removing a declaration removes only config metadata. Secret value deletion should continue to use the env update flow.
+- Non-interactive mode must fail instead of hanging.
+
+#### Output Requirements
+
+- Variables before and after editing.
+- Sensitivity changes.
+- Scope changes.
+- Removed declarations.
+- Env file mappings added.
+- Whether `propagate.yaml` was modified.
+- Next steps for config status and push.
+
+### 6.8 `propagate env pull`
 
 Pulls encrypted env values from the cloud and writes them to local env files.
 
@@ -349,7 +500,7 @@ If the user lacks read access, the CLI should say:
 - That no values were written.
 - How to request access.
 
-### 6.7 `propagate env push`
+### 6.9 `propagate env push`
 
 Pushes local env file changes to the encrypted cloud store.
 
@@ -389,7 +540,7 @@ If the user lacks write access, the CLI should:
 - Refuse the push before upload.
 - Suggest requesting a role or scope change.
 
-### 6.8 `propagate env set`
+### 6.10 `propagate env set`
 
 Sets or updates one environment variable value in the encrypted cloud store.
 
@@ -402,23 +553,24 @@ propagate env set DATABASE_URL --scope staging
 
 The value must not be passed as a positional CLI argument. The CLI should prompt for the value using a secure no-echo prompt.
 
-Default scope is inferred from config or defaults to `dev`.
+If `--scope` is omitted, the CLI should choose the only configured scope automatically. If more than one scope exists, it should prompt the user to select a scope before asking for the value. In non-interactive mode, `--scope` is required when multiple scopes exist.
 
 #### Behavior
 
 1. Read `propagate.yaml`.
-2. Determine the target scope and env file mapping.
-3. Prompt securely for the new value without echoing it.
-4. Ask for confirmation when setting a `prod` value.
+2. Determine the target scope from `--scope`, the only configured scope, or an interactive scope selection prompt.
+3. Ask for confirmation when setting a `prod` value.
+4. Prompt securely for the new value without echoing it.
 5. Fetch current encrypted cloud values and the user's scope envelope.
 6. Decrypt the scope key locally.
-7. Determine whether the variable is added or changed.
-8. Check whether the user has write access to the scope.
-9. Encrypt the new value locally.
-10. Update the variable declaration in `propagate.yaml`.
-11. Upload a single encrypted value update and updated metadata snapshot through the same cloud path as `propagate env push`.
-12. Record update event.
-13. Do not update local env files unless a future explicit flag requests it.
+7. Determine the target env file mapping.
+8. Determine whether the variable is added or changed.
+9. Check whether the user has write access to the scope.
+10. Encrypt the new value locally.
+11. Update the variable declaration in `propagate.yaml`.
+12. Upload a single encrypted value update and updated metadata snapshot through the same cloud path as `propagate env push`.
+13. Record update event.
+14. Do not update local env files unless a future explicit flag requests it.
 
 #### Output Requirements
 
@@ -441,7 +593,7 @@ If the user lacks write access, the CLI should:
 - Refuse before upload.
 - Suggest requesting a role or scope change.
 
-### 6.9 `propagate env status`
+### 6.11 `propagate env status`
 
 Shows masked values currently stored in the cloud and compares local env files against the latest cloud `propagate.yaml` declarations.
 
@@ -469,7 +621,7 @@ STRIPE_KEY=s***********x
 Last updated: 2026-04-30 10:24 by alice@example.com
 ```
 
-### 6.10 `propagate team status`
+### 6.12 `propagate team status`
 
 Shows team membership, pending requests, access changes, and pull activity.
 
@@ -556,6 +708,29 @@ Actions:
 - View public key details.
 - Cancel push.
 
+### 7.4 Config Edit TUI
+
+Used during `propagate config edit`.
+
+Must show:
+
+- Variable name.
+- Current scope.
+- Current env file path.
+- Current sensitivity.
+- Whether moving the variable will add an env file mapping to the target scope.
+
+Actions:
+
+- Toggle sensitivity.
+- Move variable declaration to another scope.
+- Remove variable declaration from config metadata.
+- Save edits.
+- Dry-run edits without writing `propagate.yaml`.
+- Cancel without saving.
+
+The TUI must show declaration metadata only. It must not show, request, or infer env values.
+
 ## 8. First-Class AI Agent Support
 
 AI coding agents are expected to work inside repositories, edit files, and call terminal tools. Propagate should make those agents safer by giving them explicit repository-local instructions and machine-friendly command behavior.
@@ -581,7 +756,7 @@ The generated guidance should tell agents:
 - Prefer `propagate config status`, `propagate team status`, and `propagate env status` for discovery.
 - Prefer `--json` for machine-readable status output.
 - Prefer `--dry-run` before any command that writes local files or cloud state.
-- Require human confirmation before running `propagate env pull`, `propagate env push`, `propagate env set`, or `propagate config push`.
+- Require human confirmation before running `propagate config edit`, `propagate env pull`, `propagate env push`, `propagate env set`, or `propagate config push`.
 - Report permission errors and pending join requirements clearly instead of attempting workarounds.
 
 Agent guidance is not an access-control system. Agents operate with the user's local filesystem and identity. Propagate must still enforce permissions in the CLI and cloud API.
@@ -610,11 +785,12 @@ Agent-friendly behavior includes:
 - Stable `--json` output for status and dry-run commands.
 - Non-interactive failure instead of hanging when stdin is not a TTY.
 - Clear separation between human-readable summaries and machine-readable JSON.
+- Consistent human-readable output with command titles, semantic status markers, styled sections, and `--no-color` support.
 - No plaintext env values in stdout, stderr, logs, JSON, or panic output.
 - Operation IDs included in JSON responses for traceability.
 - Error messages that include safe next steps, such as "run `propagate team join`" or "ask an admin to approve access."
 
-Agent-friendly behavior must not bypass human approval. Commands that can write env files, upload encrypted env values, approve access, or mutate config should require explicit confirmation unless a user intentionally passes a non-interactive approval flag.
+Agent-friendly behavior must not bypass human approval. Commands that write env files, upload encrypted env values, approve access, or publish config should require explicit confirmation unless a user intentionally passes a non-interactive approval flag. Local metadata-only commands such as `propagate team join` and `propagate scope create` may run non-interactively because their changes remain Git-reviewable until an admin publishes them.
 
 ### 8.4 Agent Audit Metadata
 
@@ -669,6 +845,11 @@ scopes:
   staging:
     env_files:
       - .env.staging
+    default_role_access:
+      developers: read
+      admins: write
+  qa:
+    env_files: []
     default_role_access:
       developers: read
       admins: write
@@ -857,12 +1038,13 @@ git push
 New developer flow:
 
 ```bash
-propagate init
-propagate team join
+propagate team join --init --handle bob@example.com --scope dev=read
 git add propagate.yaml
 git commit -m "Request Propagate access"
 git push
 ```
+
+The separate `propagate init` then `propagate team join` flow remains available for users who want to initialize identity or agent guidance separately.
 
 Admin approval flow:
 
@@ -897,9 +1079,11 @@ MVP success metrics:
 - Handle setup.
 - `propagate init`.
 - `propagate team join`.
+- `propagate scope create`.
 - `propagate config push`.
 - `propagate config pull`.
 - `propagate config status`.
+- `propagate config edit`.
 - `propagate env pull`.
 - `propagate env push`.
 - `propagate env set`.
@@ -938,7 +1122,7 @@ MVP success metrics:
 - Treat `propagate env pull` as the compatibility path for MVP, but design the data model so `propagate run` can be added cleanly later.
 - Add automatic `.gitignore` checks for managed env files.
 - Treat every env value as confidential for storage purposes, even when a user describes it as public.
-- Add a `--dry-run` option to `env push`, `env set`, `env pull`, and `config push`.
+- Add a `--dry-run` option to `env push`, `env set`, `env pull`, `config push`, `config edit`, and `scope create`.
 - Add a `--json` output mode for status commands so future CI and scripts can consume them.
 - Add an agent guidance installer to `propagate init` and make it re-runnable without changing unrelated instruction content.
 - Store enough audit metadata now to support future dashboard and CI workflows.

@@ -1,0 +1,55 @@
+---
+title: Propagate CLI Command Reference
+description: Current command surface, mutation behavior, and non-interactive usage guidance.
+---
+
+# Propagate CLI Command Reference
+
+This reference covers the current CLI commands implemented under `packages/cli/internal/cli`.
+
+Use `--help` on the root command, command groups, or leaf commands when usage is unclear. Use `--json` for machine-readable output, `--non-interactive` to fail instead of prompting, `--no-color` for plain terminal output, and `--api-url VALUE` when the Propagate API URL is not available from local configuration.
+
+## Command Matrix
+
+Root aliases are supported for help and version output: `propagate --help`, `propagate -h`, `propagate --version`, and `propagate -v`. Command groups also accept `help`, `--help`, or `-h`.
+
+| Command | Purpose | Writes | Non-interactive shape |
+| --- | --- | --- | --- |
+| `propagate version` | Print CLI version. | None | No prompt. |
+| `propagate help` | Print root help. | None | No prompt. |
+| `propagate team help` | Print team command help. | None | No prompt. |
+| `propagate scope help` | Print scope command help. | None | No prompt. |
+| `propagate config help` | Print config command help. | None | No prompt. |
+| `propagate env help` | Print env command help. | None | No prompt. |
+| `propagate init` | Create or load local identity and initialize project metadata. | Identity files, `propagate.yaml`, optional `AGENTS.md`, optional cloud setup. | Supply `--handle`, `--team-name`, `--yes`, and `--skip-agent-guidance` or `--agent-guidance` when needed. Use `--dry-run` first. |
+| `propagate team join` | Add a Git-reviewed pending join request to `propagate.yaml`. | Local `propagate.yaml`. | Supply `--handle` if identity may be missing. Use `--role`, repeated `--scope`, `--init`, and guidance flags as needed. |
+| `propagate team status` | Show local membership and cloud team activity. | None. | `--json --non-interactive`; needs identity, config, and API URL for cloud activity. |
+| `propagate scope create NAME` | Add an empty scope to local metadata. Use `config edit` afterward to set env file mappings or declaration metadata. | Local `propagate.yaml`. | Supply `NAME` and optional repeated `--env-file`; use `--dry-run` first. |
+| `propagate config status` | Compare local config metadata with cloud state. | None. | `--json --non-interactive`; needs identity, config, and API URL. |
+| `propagate config pull` | Pull cloud config into `propagate.yaml`. | Local `propagate.yaml`. | Run `--dry-run` first. Use `--yes --non-interactive` only after approving local overwrite risk. |
+| `propagate config push` | Push approved config decisions to the cloud. | Cloud config, local `propagate.yaml` revision. | Run `--dry-run` first. Use `--approve-join`, `--decline-join`, or `--skip-join` for every pending join, then `--yes --non-interactive` after approval. |
+| `propagate config edit` | Interactive editor for safe variable declaration metadata. | Local `propagate.yaml`. | Not automatable today; `--non-interactive` intentionally fails. |
+| `propagate env pull` | Decrypt cloud values locally and merge configured env files. | Local env files, pull audit event. | Run `--dry-run` first. Use `--yes --non-interactive` only after approving file creation, overwrites, or prod writes. |
+| `propagate env push` | Encrypt local env file changes and upload them. | Cloud env state, local `propagate.yaml` revision. | Run `--dry-run` first. Use `--yes --non-interactive` only after approving additions, changes, and removals. |
+| `propagate env set NAME` | Set one encrypted cloud variable without editing local env files. Prompts for scope when `--scope` is omitted and multiple scopes exist. | Cloud env state, local `propagate.yaml` revision. | Never pass the value as an argument. For automation, pipe one approved single-line value with `--scope NAME --value-stdin --yes --non-interactive`. |
+| `propagate env status` | Show encrypted cloud env metadata for a scope and local state. | None. | `--json --non-interactive`; JSON excludes masked values. |
+
+## Safety Flags
+
+`--dry-run` previews planned local or cloud changes without writing.
+
+`--yes` confirms a write-capable operation after review. It does not provide env values and does not bypass explicit join decisions.
+
+`--non-interactive` refuses prompts. If a prompt would be needed and the required flags are missing, the command exits with a confirmation-required error.
+
+`--value-stdin` is only for `propagate env set`. It reads exactly one single-line value from stdin and keeps positional env values rejected.
+
+`propagate env set` uses the only configured scope automatically. When multiple scopes exist, humans get a scope picker and non-interactive runs must pass `--scope`.
+
+## Agent Rules
+
+Prefer status commands for discovery. Prefer `--json` for parsing and summaries. For write-capable commands, show the dry-run summary first, then ask for human approval before using `--yes` or before running an interactive command.
+
+Never write env values to docs, prompts, fixtures, commits, issue text, pull request text, or agent instructions.
+
+When a command reports a permission problem, stale revision, missing identity, missing `propagate.yaml`, or pending join requirement, stop and report the next safe command from the CLI output.

@@ -102,18 +102,18 @@ func runEnvPushCommand(args []string, global globalOptions, streams Streams) int
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid env push flags", err, "Run `propagate env push --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate env push does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runEnvPush(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderEnvPushResult(streams.Out, opts.JSON, result)
+	renderEnvPushResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -178,7 +178,7 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 	result.Files = files
 	result.Warnings = append(result.Warnings, warnings...)
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return EnvPushResult{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for env push", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
@@ -249,7 +249,7 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 		result.NextSteps = []string{"Re-run without `--dry-run` and with `--yes` after reviewing the change summary."}
 		return result, nil
 	}
-	if err := confirmEnvPush(opts, reader, streams.Out, result); err != nil {
+	if err := confirmEnvPush(opts, reader, streams.In, streams.Out, result); err != nil {
 		return EnvPushResult{}, err
 	}
 
@@ -469,7 +469,7 @@ func buildEnvPushPayload(teamID string, scopeName string, scopeKey []byte, scope
 	return upserts, removals, nil
 }
 
-func confirmEnvPush(opts envPushOptions, reader *bufio.Reader, out io.Writer, result EnvPushResult) error {
+func confirmEnvPush(opts envPushOptions, reader *bufio.Reader, in io.Reader, out io.Writer, result EnvPushResult) error {
 	if opts.Yes {
 		return nil
 	}
@@ -483,7 +483,7 @@ func confirmEnvPush(opts envPushOptions, reader *bufio.Reader, out io.Writer, re
 		result.VariablesChangedCount,
 		result.VariablesRemovedCount,
 	)
-	ok, err := promptConfirm(reader, out, label, false)
+	ok, err := promptConfirm(reader, in, out, label, false)
 	if err != nil {
 		return err
 	}
@@ -552,20 +552,22 @@ func sortEnvKeys(keys []envVarKey) {
 	})
 }
 
-func renderEnvPushResult(w io.Writer, jsonOutput bool, result EnvPushResult) {
+func renderEnvPushResult(w io.Writer, jsonOutput bool, noColor bool, result EnvPushResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate env push", result.DryRun)
 	switch result.Status {
 	case "dry_run":
-		fmt.Fprintln(w, "Env push dry run complete.")
+		renderNote(w, style, "Env push dry run complete.")
 	case "no_change":
-		fmt.Fprintln(w, "Env files already match the cloud.")
+		renderNote(w, style, "Env files already match the cloud.")
 	default:
-		fmt.Fprintln(w, "Env push complete.")
+		renderOK(w, style, "Env push complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -582,7 +584,7 @@ func renderEnvPushResult(w io.Writer, jsonOutput bool, result EnvPushResult) {
 		fmt.Fprintf(w, "Operation: %s\n", result.OperationID)
 	}
 	if len(result.Files) > 0 {
-		fmt.Fprintln(w, "Files:")
+		fmt.Fprintln(w, style.bold("Files:"))
 		for _, file := range result.Files {
 			fmt.Fprintf(w, "  - %s: %d added, %d changed, %d removed, %d unchanged\n", file.Path, file.VariablesAdded, file.VariablesChanged, file.VariablesRemoved, file.VariablesUnchanged)
 		}
@@ -595,23 +597,13 @@ func renderEnvPushResult(w io.Writer, jsonOutput bool, result EnvPushResult) {
 	fmt.Fprintf(w, "Removed variables uploaded: %d\n", result.RemovedVariablesCount)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 	if len(result.Changes) > 0 {
-		fmt.Fprintln(w, "Changes:")
+		fmt.Fprintln(w, style.bold("Changes:"))
 		for _, change := range result.Changes {
 			fmt.Fprintf(w, "  - %s %s in %s\n", change.Change, change.Name, change.Path)
 		}
 	}
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
 func printEnvPushHelp(w io.Writer) {

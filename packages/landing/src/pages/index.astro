@@ -9,83 +9,107 @@ const terminals: TerminalDef[] = [
   {
     step: "01",
     label: "Admin sets up the project",
-    user: "alice@acme",
+    user: "maya@acme",
     dir: "~/my-project",
     lines: [
-      { kind: "cmd",    text: 'propagate init --handle alice@example.com --team-name "Acme API"' },
-      { kind: "output", text: "  Checking for existing identity..." },
-      { kind: "output", text: "  ✓ Keypair generated → ~/.propagate/id_ed25519" },
-      { kind: "output", text: "  ✓ Identity set: alice@example.com" },
+      { kind: "cmd",    text: 'propagate init --handle maya@acme.com --team-name "Acme API"' },
+      { kind: "output", text: "Propagate init" },
       { kind: "blank" },
-      { kind: "output", text: "  Scanning repository for .env files..." },
-      { kind: "output", text: "  Found .env  (2 variables)" },
+      { kind: "output", text: "Checking for existing identity..." },
+      { kind: "output", text: "✓ Keypair generated → ~/.propagate/identity" },
+      { kind: "output", text: "✓ Identity set: maya@acme.com (sha256:8f96...)" },
       { kind: "blank" },
-      { kind: "output", text: "    DATABASE_URL   d***l   scope: dev" },
-      { kind: "output", text: "    API_TOKEN      s***9   scope: dev" },
+      { kind: "output", text: "Scanning repository for .env files..." },
+      { kind: "output", text: "✓ Found .env (2 variables) scope: dev" },
+      { kind: "output", text: "  DATABASE_URL p**p scope: dev" },
+      { kind: "output", text: "  API_TOKEN s**9 scope: dev" },
       { kind: "blank" },
-      { kind: "output", text: "  Encrypting 2 variables for scope: dev..." },
-      { kind: "output", text: "  ✓ Uploaded to cloud" },
-      { kind: "output", text: "  ✓ propagate.yaml written  (rev_00001)" },
+      { kind: "output", text: "Encrypting 2 variables for scope: dev..." },
+      { kind: "output", text: "✓ Uploaded to cloud (2 variables)" },
+      { kind: "output", text: "Writing project metadata..." },
+      { kind: "output", text: "✓ propagate.yaml written (rev_00001) → ~/my-project/propagate.yaml" },
     ],
   },
   {
     step: "02",
     label: "New developer requests access",
-    user: "bob@acme",
+    user: "sarah@acme",
     dir: "~/my-project",
     lines: [
-      { kind: "cmd",    text: "propagate init --handle bob@example.com" },
-      { kind: "output", text: "  ✓ Keypair generated → ~/.propagate/id_ed25519" },
-      { kind: "output", text: "  ✓ Identity set: bob@example.com" },
-      { kind: "output", text: "  ! propagate.yaml found. Run team join to request access." },
+      { kind: "cmd",    text: "propagate team join --init --handle sarah@acme.com" },
+      { kind: "output", text: "Propagate team join" },
       { kind: "blank" },
-      { kind: "cmd",    text: "propagate team join --scope dev=read" },
-      { kind: "output", text: "  Reading propagate.yaml..." },
-      { kind: "output", text: "  ✓ Join request added to propagate.yaml" },
+      { kind: "output", text: "✓ Init completed before join." },
+      { kind: "output", text: "✓ Project config already existed." },
       { kind: "blank" },
-      { kind: "output", text: "  You do not have secret access yet." },
-      { kind: "output", text: "  Next steps:" },
-      { kind: "output", text: "    1. git add propagate.yaml && git commit" },
-      { kind: "output", text: "    2. Open a pull request" },
-      { kind: "output", text: "    3. Ask an admin to run propagate config push" },
+      { kind: "output", text: "✓ Join request added to propagate.yaml." },
+      { kind: "output", text: "• You do not have secret access yet." },
+      { kind: "blank" },
+      { kind: "output", text: "Created local identity: sarah@acme.com (sha256:264c...)" },
+      { kind: "output", text: "Team: Acme API (team_acme_api)" },
+      { kind: "output", text: "Requested role: developers" },
+      { kind: "output", text: "Requested scopes:" },
+      { kind: "output", text: "  - dev: read" },
+      { kind: "output", text: "Backend: not_contacted_git_review_only" },
+      { kind: "blank" },
+      { kind: "output", text: "Next steps:" },
+      { kind: "output", text: "1. Commit this config change." },
+      { kind: "output", text: "2. Open a pull request." },
+      { kind: "output", text: "3. Ask a Propagate admin to run `propagate config push` after approval." },
     ],
   },
   {
     step: "03",
-    label: "Admin approves after config update (can be a step in CI)",
-    user: "alice@acme",
+    label: "Admin approves the reviewed join",
+    user: "maya@acme",
     dir: "~/my-project",
     lines: [
       { kind: "cmd",    text: "git pull" },
-      { kind: "output", text: "  1 file changed  (propagate.yaml)" },
+      { kind: "output", text: "1 file changed (propagate.yaml)" },
       { kind: "blank" },
       { kind: "cmd",    text: "propagate config push" },
-      { kind: "output", text: "  Pending joins:" },
-      { kind: "output", text: "    bob@example.com   dev=read   sha256:def456..." },
+      { kind: "output", text: "Propagate config push" },
       { kind: "blank" },
-      { kind: "output", text: "  ✓ Approved: bob@example.com" },
-      { kind: "output", text: "  ✓ Scope key encrypted for bob's public key" },
-      { kind: "output", text: "  ✓ 1 envelope uploaded  (rev_00002)" },
-      { kind: "output", text: "  ✓ propagate.yaml updated" },
+      { kind: "output", text: "✓ Config push complete." },
+      { kind: "blank" },
+      { kind: "output", text: "Team: Acme API (team_acme_api)" },
+      { kind: "output", text: "Pushed by: maya@acme.com (sha256:8f96...)" },
+      { kind: "output", text: "Revision: rev_00001 -> rev_00002" },
+      { kind: "output", text: "Approved joins: 1" },
+      { kind: "output", text: "Declined joins: 0" },
+      { kind: "output", text: "Skipped joins: 0" },
+      { kind: "output", text: "Encrypted access envelopes uploaded: 1" },
+      { kind: "output", text: "propagate.yaml modified: true" },
+      { kind: "output", text: "Backend: pushed" },
+      { kind: "output", text: "Approved joins:" },
+      { kind: "output", text: "  - sarah@acme.com (sha256:264c...), role developers, scopes dev:read" },
     ],
   },
   {
     step: "04",
     label: "Developer pulls encrypted secrets",
-    user: "bob@acme",
+    user: "sarah@acme",
     dir: "~/my-project",
     lines: [
-      { kind: "cmd",    text: "propagate env pull --scope dev" },
-      { kind: "output", text: "  Reading propagate.yaml..." },
-      { kind: "output", text: "  Fetching encrypted variables..." },
-      { kind: "output", text: "  Decrypting with ~/.propagate/id_ed25519..." },
-      { kind: "output", text: "  ✓ DATABASE_URL  →  .env" },
-      { kind: "output", text: "  ✓ API_TOKEN     →  .env" },
-      { kind: "output", text: "  ✓ 2 variables written to .env" },
+      { kind: "cmd",    text: "propagate env pull" },
+      { kind: "output", text: "Propagate env pull" },
+      { kind: "blank" },
+      { kind: "output", text: "✓ Env pull complete." },
+      { kind: "blank" },
+      { kind: "output", text: "Team: Acme API (team_acme_api)" },
+      { kind: "output", text: "Scope: dev" },
+      { kind: "output", text: "Pulled by: sarah@acme.com (sha256:264c...)" },
+      { kind: "output", text: "Config revision: rev_00002" },
+      { kind: "output", text: "Files:" },
+      { kind: "output", text: "  - .env: created (2 added, 0 overwritten, 0 unchanged, 0 preserved)" },
+      { kind: "output", text: "Variables pulled: 2" },
+      { kind: "output", text: "Variables written: 2" },
+      { kind: "output", text: "Pull event recorded: true" },
+      { kind: "output", text: "Backend: fetched" },
       { kind: "blank" },
       { kind: "cmd",    text: "cat .env" },
-      { kind: "output", text: "  DATABASE_URL=p***************2" },
-      { kind: "output", text: "  API_TOKEN=s***********9" },
+      { kind: "output", text: "DATABASE_URL=p***************2" },
+      { kind: "output", text: "API_TOKEN=s***********9" },
     ],
   },
 ];
@@ -188,10 +212,10 @@ const features = [
         <div class="mb-16">
           <p class="eyebrow mb-3">Features</p>
           <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4" style="letter-spacing:-0.03em">
-            <span style="display:block;margin-bottom:0.2em">Designed for how</span><span>teams actually <span style="font-family:'Instrument Serif','Iowan Old Style',Georgia,serif;font-style:italic;font-weight:400;background:rgba(255,229,0,0.2);padding:0 0.15em">work</span></span>
+            <span style="display:block;margin-bottom:0.2em">Secrets management</span><span style="display:block;margin-bottom:0.2em">done right for dev teams</span><span>and AI <span style="font-family:'Instrument Serif','Iowan Old Style',Georgia,serif;font-style:italic;font-weight:400;background:rgba(255,229,0,0.2);padding:0 0.15em">agents.</span></span>
           </h2>
           <p class="text-lg max-w-xl" style="color:#888">
-            No new accounts, no browser required. A CLI that fits into the way developers already work.
+            No accounts, no dashboards. Secrets stay encrypted, access changes go through pull requests.
           </p>
         </div>
 
@@ -219,16 +243,16 @@ const features = [
     <section id="how-it-works" class="py-24 px-6" style="border-top:2px solid #fff">
       <div class="max-w-6xl mx-auto">
 
-        <div class="grid lg:grid-cols-2 gap-0" style="position:relative;z-index:1;border:2px solid #fff;box-shadow:6px 6px 0 #FFE500;background:#111">
+        <div class="grid lg:grid-cols-2 gap-0 items-start" style="position:relative;z-index:1;border:2px solid #fff;box-shadow:6px 6px 0 #FFE500;background:#111">
 
-          <!-- Left: text -->
-          <div class="p-10 flex flex-col justify-center" style="border-right:2px solid #fff;background:#111">
+          <!-- Left: text (sticky on lg screens) -->
+          <div class="p-10 flex flex-col justify-center lg:sticky lg:top-[3.5rem] lg:self-start lg:h-[calc(100vh-3.5rem)]" style="border-right:2px solid #fff;background:#111">
             <p class="eyebrow mb-4">How it works</p>
             <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight mb-6" style="letter-spacing:-0.03em">
               <span style="display:block;margin-bottom:0.2em">Simple,</span><span style="display:block;margin-bottom:0.2em">declarative,</span><span style="font-family:'Instrument Serif','Iowan Old Style',Georgia,serif;font-style:italic;font-weight:400;background:rgba(255,229,0,0.2);padding:0 0.15em">e2e encrypted.</span>
             </h2>
             <p class="text-base leading-relaxed mb-8" style="color:#bbb">
-              Your entire team config lives in <code style="font-family:'JetBrains Mono',monospace;color:#FFE500;font-size:0.9em">propagate.yaml</code> — committed to Git, reviewed in PRs, auditable forever. Access changes are code changes.
+              Team config lives in <code style="font-family:'JetBrains Mono',monospace;color:#FFE500;font-size:0.9em">propagate.yaml</code> — committed to Git, reviewed in PRs, auditable forever. Access changes are just code changes.
             </p>
             <ul class="space-y-3 text-sm" style="color:#888">
               <li class="flex items-start gap-3">
@@ -259,29 +283,46 @@ const features = [
               <span style="font-family:'JetBrains Mono',monospace;font-size:0.8rem;color:#FFE500;font-weight:700">propagate.yaml</span>
             </div>
             <!-- code -->
-            <pre style="font-family:'JetBrains Mono',monospace;font-size:0.8rem;line-height:1.8;padding:1.5rem 1.5rem 2rem;overflow-x:auto;color:#ccc;margin:0"><span style="color:#555"># generated by propagate init</span>
+            <pre style="font-family:'JetBrains Mono',monospace;font-size:0.8rem;line-height:1.8;padding:1.5rem 1.5rem 2rem;overflow-x:auto;color:#ccc;margin:0"><span style="color:#555"># Propagate project configuration.</span>
 <span style="color:#FFE500">version</span><span style="color:#888">:</span> <span style="color:#fff">1</span>
-<span style="color:#FFE500">team</span><span style="color:#888">:</span> <span style="color:#fff">acme-api</span>
-<span style="color:#FFE500">admin</span><span style="color:#888">:</span> <span style="color:#fff">alice@acme.com</span>
+<span style="color:#FFE500">team</span><span style="color:#888">:</span>
+  <span style="color:#FFE500">id</span><span style="color:#888">:</span> <span style="color:#fff">"team_acme_api"</span>
+  <span style="color:#FFE500">name</span><span style="color:#888">:</span> <span style="color:#fff">"Acme API"</span>
+  <span style="color:#FFE500">cloud_revision</span><span style="color:#888">:</span> <span style="color:#fff">"rev_00002"</span>
+  <span style="color:#FFE500">sync_status</span><span style="color:#888">:</span> <span style="color:#fff">"synced"</span>
+
+<span style="color:#FFE500">scopes</span><span style="color:#888">:</span>
+  <span style="color:#FFE500">dev</span><span style="color:#888">:</span>
+    <span style="color:#FFE500">env_files</span><span style="color:#888">:</span>
+      <span style="color:#888">-</span> <span style="color:#fff">".env"</span>
+    <span style="color:#FFE500">variables</span><span style="color:#888">:</span>
+      <span style="color:#888">-</span> <span style="color:#FFE500">name</span><span style="color:#888">:</span> <span style="color:#fff">"DATABASE_URL"</span>
+        <span style="color:#FFE500">env_file_path</span><span style="color:#888">:</span> <span style="color:#fff">".env"</span>
+        <span style="color:#FFE500">sensitivity</span><span style="color:#888">:</span> <span style="color:#fff">sensitive</span>
+        <span style="color:#FFE500">digest</span><span style="color:#888">:</span> <span style="color:#fff">"hmac-sha-256:v1:..."</span>
+      <span style="color:#888">-</span> <span style="color:#FFE500">name</span><span style="color:#888">:</span> <span style="color:#fff">"API_TOKEN"</span>
+        <span style="color:#FFE500">env_file_path</span><span style="color:#888">:</span> <span style="color:#fff">".env"</span>
+        <span style="color:#FFE500">sensitivity</span><span style="color:#888">:</span> <span style="color:#fff">sensitive</span>
+        <span style="color:#FFE500">digest</span><span style="color:#888">:</span> <span style="color:#fff">"hmac-sha-256:v1:..."</span>
+    <span style="color:#FFE500">default_role_access</span><span style="color:#888">:</span>
+      <span style="color:#FFE500">developers</span><span style="color:#888">:</span> <span style="color:#fff">read</span>
+      <span style="color:#FFE500">admins</span><span style="color:#888">:</span> <span style="color:#fff">write</span>
 
 <span style="color:#FFE500">members</span><span style="color:#888">:</span>
-  <span style="color:#888">-</span> <span style="color:#FFE500">handle</span><span style="color:#888">:</span> <span style="color:#fff">alice@acme.com</span>
-    <span style="color:#FFE500">role</span><span style="color:#888">:</span>   <span style="color:#fff">admin</span>
-    <span style="color:#FFE500">scopes</span><span style="color:#888">:</span> <span style="color:#fff">[dev, staging, prod]</span>
-  <span style="color:#888">-</span> <span style="color:#FFE500">handle</span><span style="color:#888">:</span> <span style="color:#fff">bob@acme.com</span>
-    <span style="color:#FFE500">role</span><span style="color:#888">:</span>   <span style="color:#fff">member</span>
-    <span style="color:#FFE500">scopes</span><span style="color:#888">:</span> <span style="color:#fff">[dev]</span>
+  <span style="color:#888">-</span> <span style="color:#FFE500">handle</span><span style="color:#888">:</span> <span style="color:#fff">"maya@acme.com"</span>
+    <span style="color:#FFE500">public_key_sha</span><span style="color:#888">:</span> <span style="color:#fff">"sha256:8f96..."</span>
+    <span style="color:#FFE500">signing_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"ssh-ed25519 AAAA..."</span>
+    <span style="color:#FFE500">encryption_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"x25519:..."</span>
+    <span style="color:#FFE500">role</span><span style="color:#888">:</span> <span style="color:#fff">admins</span>
+  <span style="color:#888">-</span> <span style="color:#FFE500">handle</span><span style="color:#888">:</span> <span style="color:#fff">"sarah@acme.com"</span>
+    <span style="color:#FFE500">public_key_sha</span><span style="color:#888">:</span> <span style="color:#fff">"sha256:264c..."</span>
+    <span style="color:#FFE500">signing_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"ssh-ed25519 AAAA..."</span>
+    <span style="color:#FFE500">encryption_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"x25519:..."</span>
+    <span style="color:#FFE500">role</span><span style="color:#888">:</span> <span style="color:#fff">developers</span>
 
-<span style="color:#FFE500">variables</span><span style="color:#888">:</span>
-  <span style="color:#888">-</span> <span style="color:#FFE500">name</span><span style="color:#888">:</span>  <span style="color:#fff">DATABASE_URL</span>
-    <span style="color:#FFE500">scope</span><span style="color:#888">:</span> <span style="color:#fff">dev</span>
-    <span style="color:#FFE500">rev</span><span style="color:#888">:</span>   <span style="color:#fff">00003</span>
-  <span style="color:#888">-</span> <span style="color:#FFE500">name</span><span style="color:#888">:</span>  <span style="color:#fff">API_TOKEN</span>
-    <span style="color:#FFE500">scope</span><span style="color:#888">:</span> <span style="color:#fff">dev</span>
-    <span style="color:#FFE500">rev</span><span style="color:#888">:</span>   <span style="color:#fff">00003</span>
-  <span style="color:#888">-</span> <span style="color:#FFE500">name</span><span style="color:#888">:</span>  <span style="color:#fff">STRIPE_SECRET</span>
-    <span style="color:#FFE500">scope</span><span style="color:#888">:</span> <span style="color:#fff">staging</span>
-    <span style="color:#FFE500">rev</span><span style="color:#888">:</span>   <span style="color:#fff">00001</span></pre>
+<span style="color:#FFE500">pending</span><span style="color:#888">:</span>
+  <span style="color:#FFE500">joins</span><span style="color:#888">:</span> <span style="color:#fff">[]</span>
+  <span style="color:#FFE500">access_changes</span><span style="color:#888">:</span> <span style="color:#fff">[]</span></pre>
           </div>
 
         </div>
@@ -298,20 +339,22 @@ const features = [
           Open source · MIT license
         </div>
         <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4" style="color:#000;letter-spacing:-0.03em">
-          Stop leaking<br />.env files.
+          Your secrets don't<br />belong in Slack.
         </h2>
         <p class="text-lg mb-10" style="color:#333">
-          Propagate is open source. Star it, use it, contribute to it.
+          Open source. Set up in minutes and your team's secrets never touch Slack again.
         </p>
         <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <div
-            class="flex items-center gap-3 px-5 py-3 font-mono text-sm font-bold cursor-pointer"
-            style="background:#fff;color:#000;border:2px solid #000;box-shadow:4px 4px 0 #000"
-            onclick="navigator.clipboard.writeText('go install github.com/renton4code/propagate-cli/cli/cmd/propagate@latest')"
+          <a
+            href="https://github.com/renton4code/propagate-cli"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex items-center gap-3 px-5 py-3 font-mono text-sm font-bold"
+            style="background:#fff;color:#000;border:2px solid #000;box-shadow:4px 4px 0 #000;text-decoration:none"
           >
             <span style="color:#888">$</span>
-            <span>go install propagate@latest</span>
-          </div>
+            <span>propagate init</span>
+          </a>
           <a
             href="https://github.com/renton4code/propagate-cli"
             target="_blank"

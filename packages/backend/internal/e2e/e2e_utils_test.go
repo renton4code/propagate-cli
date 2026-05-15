@@ -62,7 +62,7 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 			t.Logf("close postgres connection: %v", err)
 		}
 	})
-	applyMigrations(t, ctx, db.DB, filepath.Join(root, "backend", "migrations"))
+	applyMigrations(t, ctx, db.DB, filepath.Join(root, "packages", "backend", "migrations"))
 
 	apiServer := httptest.NewServer(api.NewServer(storage.NewSQLStore(db.DB), api.Config{}))
 	t.Cleanup(apiServer.Close)
@@ -404,7 +404,7 @@ func buildCLI(t *testing.T, ctx context.Context, root string) string {
 		outName += ".exe"
 	}
 	outPath := filepath.Join(t.TempDir(), outName)
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", outPath, "./cli/cmd/propagate")
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", outPath, "./packages/cli/cmd/propagate")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -429,7 +429,7 @@ func repoRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot determine test file path")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../.."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../.."))
 	if _, err := os.Stat(filepath.Join(root, "go.work")); err != nil {
 		t.Fatalf("cannot determine repo root from %s: %v", file, err)
 	}

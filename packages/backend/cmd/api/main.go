@@ -10,12 +10,17 @@ import (
 	"time"
 
 	"propagate/backend/internal/api"
+	"propagate/backend/internal/dotenv"
 	"propagate/backend/internal/storage"
 
 	_ "github.com/lib/pq"
 )
 
 func main() {
+	if err := dotenv.LoadDefault(); err != nil {
+		log.Fatalf("load .env: %v", err)
+	}
+
 	config := api.ConfigFromEnv()
 	var store storage.Store = storage.NewMemoryStore()
 	if databaseURL := strings.TrimSpace(os.Getenv("PROPAGATE_DATABASE_URL")); databaseURL != "" {

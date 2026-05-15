@@ -1,0 +1,187 @@
+---
+title: Propagate CLI Scenarios
+description: Scenario-oriented workflows for agents and humans using the current Propagate CLI.
+---
+
+# Propagate CLI Scenarios
+
+These workflows use placeholders such as `<handle>`, `<scope>`, and `<sha>`. Do not replace placeholders in docs with real env values.
+
+When command usage is unclear, run `propagate --help`, `propagate <group> --help`, or `propagate <group> <command> --help`.
+
+## Inspect A Repository
+
+Use read-only status commands before changing anything:
+
+```bash
+propagate config status --json --non-interactive
+propagate team status --json --non-interactive
+propagate env status --scope dev --json --non-interactive
+```
+
+If the cloud cannot be reached, pass `--api-url VALUE` or configure it outside docs and prompts.
+
+## Initialize A New Team Project
+
+Preview setup first:
+
+```bash
+propagate init --handle <handle> --team-name <team-name> --skip-agent-guidance --dry-run --json --non-interactive
+```
+
+After reviewing the env file mappings and getting approval:
+
+```bash
+propagate init --handle <handle> --team-name <team-name> --skip-agent-guidance --yes --non-interactive
+```
+
+Use `--agent-guidance` instead of `--skip-agent-guidance` when the human wants `AGENTS.md` updated.
+
+## Request Team Access
+
+Preview the join request:
+
+```bash
+propagate team join --handle <handle> --role developers --scope dev=read --dry-run --json --non-interactive
+```
+
+Write the Git-reviewed request:
+
+```bash
+propagate team join --handle <handle> --role developers --scope dev=read --non-interactive
+```
+
+Commit the resulting `propagate.yaml` change and ask an admin to review it before `propagate config push`.
+
+## Approve Or Decline Pending Joins
+
+Inspect the pending state:
+
+```bash
+propagate team status --json --non-interactive
+propagate config status --json --non-interactive
+```
+
+Preview decisions:
+
+```bash
+propagate config push --approve-join <sha> --skip-join <sha> --dry-run --json --non-interactive
+```
+
+After human approval, publish:
+
+```bash
+propagate config push --approve-join <sha> --skip-join <sha> --yes --non-interactive
+```
+
+Every pending join needs an explicit `--approve-join`, `--decline-join`, or `--skip-join` decision in non-interactive mode.
+
+## Pull Cloud Config
+
+Preview the cloud-to-local config update:
+
+```bash
+propagate config pull --dry-run --json --non-interactive
+```
+
+If the preview is approved and local overwrite risk is understood:
+
+```bash
+propagate config pull --yes --non-interactive
+```
+
+Review and commit the resulting `propagate.yaml` revision change.
+
+## Create A Scope
+
+Preview local metadata:
+
+```bash
+propagate scope create staging --env-file .env.staging --dry-run --json --non-interactive
+```
+
+Write the local scope metadata:
+
+```bash
+propagate scope create staging --env-file .env.staging --non-interactive
+```
+
+Use `propagate config edit` after scope creation to add env file mappings or move declaration metadata into the new scope. Scope creation does not copy metadata or values from existing scopes.
+
+The scope becomes cloud-visible only after an admin reviews and runs `propagate config push`.
+
+After publication, seed the mapped target env file locally and use `propagate env push --scope staging --dry-run` to preview the encrypted upload. Keep env values out of chat, docs, tests, and pull request text.
+
+## Edit Config Metadata
+
+`propagate config edit` is interactive. Use it when a human is present:
+
+```bash
+propagate config edit
+```
+
+Agents should not drive this editor blindly. For automation, propose the intended metadata change and let the human decide whether to run the interactive editor or make a reviewable metadata-only edit.
+
+## Pull Env Values
+
+Preview file changes:
+
+```bash
+propagate env pull --scope dev --dry-run --json --non-interactive
+```
+
+After human approval for file creation, overwrites, or prod writes:
+
+```bash
+propagate env pull --scope dev --yes --non-interactive
+```
+
+Do not copy values from local env files into chat, docs, tests, fixtures, or commits.
+
+## Push Local Env File Changes
+
+Preview the encrypted upload plan:
+
+```bash
+propagate env push --scope dev --dry-run --json --non-interactive
+```
+
+After human approval of additions, changes, and removals:
+
+```bash
+propagate env push --scope dev --yes --non-interactive
+```
+
+If the command reports a secret version conflict, run `propagate env pull --scope dev --dry-run` and review before retrying.
+
+## Set One Env Value
+
+Interactive mode prompts without echo:
+
+```bash
+propagate env set NAME --scope dev
+```
+
+If `--scope` is omitted and more than one scope exists, the command asks the user to choose the target scope before prompting for the value. If exactly one scope exists, that scope is used automatically.
+
+Non-interactive mode requires an approved secure stdin channel and explicit confirmation:
+
+```bash
+propagate env set NAME --scope dev --value-stdin --yes --non-interactive
+```
+
+Keep `--scope` explicit in non-interactive runs whenever the repository has multiple scopes.
+
+Never pass the value as a positional argument. Never show the value in terminal summaries, docs, issue text, pull requests, tests, or agent messages.
+
+## Handle Permission Or Revision Errors
+
+When a command reports permission denied, pending join required, stale config revision, or missing scope access, stop and report the blocker. The usual safe next commands are:
+
+```bash
+propagate team status --json --non-interactive
+propagate config status --json --non-interactive
+propagate config pull --dry-run --json --non-interactive
+```
+
+Do not retry write-capable commands with broader flags unless the human explicitly approves the specific next action.

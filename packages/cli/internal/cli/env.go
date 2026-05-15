@@ -90,7 +90,7 @@ func runEnvCommand(args []string, global globalOptions, streams Streams) int {
 		return ExitSuccess
 	default:
 		err := commandError(ExitUsageError, "usage_error", fmt.Sprintf("Unknown env command %q", args[0]), nil, "Run `propagate env help` to see available env commands.")
-		return renderError(streams.Err, global.JSON, err)
+		return renderError(streams.Err, global.JSON, global.NoColor, err)
 	}
 }
 
@@ -109,18 +109,18 @@ func runEnvPullCommand(args []string, global globalOptions, streams Streams) int
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid env pull flags", err, "Run `propagate env pull --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate env pull does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runEnvPull(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderEnvPullResult(streams.Out, opts.JSON, result)
+	renderEnvPullResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -175,7 +175,7 @@ func runEnvPull(opts envPullOptions, streams Streams) (EnvPullResult, error) {
 		return EnvPullResult{}, commandError(ExitValidationError, "scope_not_found", fmt.Sprintf("Scope %q is not configured in propagate.yaml", scopeName), nil, "Run `propagate config pull` if the scope was added in the cloud.")
 	}
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return EnvPullResult{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for env pull", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
@@ -236,7 +236,7 @@ func runEnvPull(opts envPullOptions, streams Streams) (EnvPullResult, error) {
 		return result, nil
 	}
 
-	if err := confirmEnvPullWrites(opts, reader, streams.Out, scopeName, plans); err != nil {
+	if err := confirmEnvPullWrites(opts, reader, streams.In, streams.Out, scopeName, plans); err != nil {
 		return EnvPullResult{}, err
 	}
 
@@ -362,7 +362,7 @@ func buildEnvPullPlans(root string, filePaths []string, valuesByFile map[string]
 	return plans, nil
 }
 
-func confirmEnvPullWrites(opts envPullOptions, reader *bufio.Reader, out io.Writer, scopeName string, plans []envPullPlan) error {
+func confirmEnvPullWrites(opts envPullOptions, reader *bufio.Reader, in io.Reader, out io.Writer, scopeName string, plans []envPullPlan) error {
 	changed := false
 	creates := 0
 	overwrites := 0
@@ -382,7 +382,7 @@ func confirmEnvPullWrites(opts envPullOptions, reader *bufio.Reader, out io.Writ
 		if opts.NonInteractive {
 			return commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive prod env pull requires --yes before writing local files", nil, "Re-run with `--yes` after reviewing `propagate env pull --scope prod --dry-run`.")
 		}
-		ok, err := promptConfirm(reader, out, "Pull prod env values into local files?", false)
+		ok, err := promptConfirm(reader, in, out, "Pull prod env values into local files?", false)
 		if err != nil {
 			return err
 		}
@@ -395,7 +395,7 @@ func confirmEnvPullWrites(opts envPullOptions, reader *bufio.Reader, out io.Writ
 			return commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive env pull requires --yes before creating files or overwriting existing values", nil, "Re-run with `--yes` after reviewing `propagate env pull --dry-run`.")
 		}
 		label := fmt.Sprintf("Apply env pull changes (%d new file(s), %d overwrite(s))?", creates, overwrites)
-		ok, err := promptConfirm(reader, out, label, false)
+		ok, err := promptConfirm(reader, in, out, label, false)
 		if err != nil {
 			return err
 		}
@@ -499,20 +499,22 @@ func safeAPIError(err error) string {
 	return err.Error()
 }
 
-func renderEnvPullResult(w io.Writer, jsonOutput bool, result EnvPullResult) {
+func renderEnvPullResult(w io.Writer, jsonOutput bool, noColor bool, result EnvPullResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate env pull", result.DryRun)
 	switch result.Status {
 	case "dry_run":
-		fmt.Fprintln(w, "Env pull dry run complete.")
+		renderNote(w, style, "Env pull dry run complete.")
 	case "no_change":
-		fmt.Fprintln(w, "Env files already match the cloud.")
+		renderNote(w, style, "Env files already match the cloud.")
 	default:
-		fmt.Fprintln(w, "Env pull complete.")
+		renderOK(w, style, "Env pull complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -526,7 +528,7 @@ func renderEnvPullResult(w io.Writer, jsonOutput bool, result EnvPullResult) {
 		fmt.Fprintf(w, "Config revision: %s\n", result.ConfigRevision)
 	}
 	if len(result.Files) > 0 {
-		fmt.Fprintln(w, "Files:")
+		fmt.Fprintln(w, style.bold("Files:"))
 		for _, file := range result.Files {
 			action := "unchanged"
 			if result.DryRun && file.WouldUpdate {
@@ -547,18 +549,8 @@ func renderEnvPullResult(w io.Writer, jsonOutput bool, result EnvPullResult) {
 	fmt.Fprintf(w, "Variables written: %d\n", result.VariablesWrittenCount)
 	fmt.Fprintf(w, "Pull event recorded: %t\n", result.PullEventRecorded)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
 func printEnvHelp(w io.Writer) {

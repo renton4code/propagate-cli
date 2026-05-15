@@ -606,10 +606,11 @@ Inputs:
 | Input | Required | Notes |
 | --- | --- | --- |
 | Variable name | Required | Positional name only, never the value |
-| `--scope` | Optional | Defaults to configured default or `dev` |
-| Secure prompt value | Required | No-echo terminal prompt |
+| `--scope` | Optional | If omitted, use the only configured scope or prompt when multiple scopes exist; required in non-interactive mode when multiple scopes exist |
+| Secure prompt value | Required unless `--value-stdin` is used | No-echo terminal prompt after scope resolution |
+| `--value-stdin` | Optional | Read one single-line value from stdin; requires `--yes` for upload and must still use explicit `--scope` in non-interactive multi-scope repos |
 | `--dry-run` | Optional | Validate and show add/change plan without upload |
-| `--yes` | Optional | Must not bypass secure value prompt |
+| `--yes` | Optional | Must not bypass secure value input; confirms upload only |
 
 Local reads:
 
@@ -638,7 +639,8 @@ Success result:
 
 Failure behavior:
 
-- If no TTY is available for secure prompt, fail with confirmation/input-required guidance.
+- If no TTY is available for secure prompt and `--value-stdin` was not supplied, fail with confirmation/input-required guidance.
+- If multiple scopes exist in non-interactive mode and `--scope` was omitted, fail with scope-required guidance.
 - If a plaintext value is passed as an extra positional argument, reject the command.
 - If write access is denied, upload nothing.
 - If the current cloud version ID differs from the expected value, return conflict and advise pull.
@@ -1239,7 +1241,7 @@ The sentinel must not appear in:
 | Multiple agent targets | Let user choose; in non-interactive mode require explicit target list |
 | Generated guidance would include unsafe text | Refuse write and report validation error |
 | `env set` receives value as extra positional arg | Reject command and instruct secure prompt usage |
-| `env set` has no TTY | Fail unless a future explicit non-echo input channel is provided |
+| `env set` has no TTY | Fail unless `--value-stdin` provides an approved single-line input channel |
 
 ## 11. Implementation Order
 

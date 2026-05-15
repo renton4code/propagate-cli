@@ -20,10 +20,13 @@ import (
 
 type teamJoinOptions struct {
 	globalOptions
-	Handle          string
-	RequestedRole   string
-	RequestedScopes scopeFlags
-	DryRun          bool
+	Handle            string
+	RequestedRole     string
+	RequestedScopes   scopeFlags
+	DryRun            bool
+	IncludeInit       bool
+	InitAgentGuidance bool
+	InitSkipGuidance  bool
 }
 
 type scopeFlags []string
@@ -33,6 +36,8 @@ type TeamJoinResult struct {
 	Command             string            `json:"command"`
 	Status              string            `json:"status"`
 	DryRun              bool              `json:"dry_run"`
+	InitIncluded        bool              `json:"init_included,omitempty"`
+	Init                *InitResult       `json:"init,omitempty"`
 	PendingJoinAdded    bool              `json:"pending_join_added"`
 	WouldAddPendingJoin bool              `json:"would_add_pending_join,omitempty"`
 	ProjectConfigPath   string            `json:"project_config_path"`
@@ -63,7 +68,7 @@ func runTeamCommand(args []string, global globalOptions, streams Streams) int {
 		return ExitSuccess
 	default:
 		err := commandError(ExitUsageError, "usage_error", fmt.Sprintf("Unknown team command %q", args[0]), nil, "Run `propagate team help` to see available team commands.")
-		return renderError(streams.Err, global.JSON, err)
+		return renderError(streams.Err, global.JSON, global.NoColor, err)
 	}
 }
 
@@ -79,6 +84,9 @@ func runTeamJoinCommand(args []string, global globalOptions, streams Streams) in
 	fs.StringVar(&opts.RequestedRole, "role", opts.RequestedRole, "requested role: developers or admins")
 	fs.Var(&opts.RequestedScopes, "scope", "requested scope, optionally as scope=permission; may be repeated")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "show what would happen without writing propagate.yaml")
+	fs.BoolVar(&opts.IncludeInit, "init", false, "run existing-project init before adding the join request")
+	fs.BoolVar(&opts.InitAgentGuidance, "agent-guidance", false, "with --init, create or update generic AGENTS.md Propagate guidance")
+	fs.BoolVar(&opts.InitSkipGuidance, "skip-agent-guidance", false, "with --init, skip agent guidance setup")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -86,18 +94,26 @@ func runTeamJoinCommand(args []string, global globalOptions, streams Streams) in
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid team join flags", err, "Run `propagate team join --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate team join does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
+	}
+	if opts.InitAgentGuidance && opts.InitSkipGuidance {
+		cmdErr := commandError(ExitUsageError, "usage_error", "--agent-guidance and --skip-agent-guidance cannot be used together", nil)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
+	}
+	if !opts.IncludeInit && (opts.InitAgentGuidance || opts.InitSkipGuidance) {
+		cmdErr := commandError(ExitUsageError, "usage_error", "--agent-guidance and --skip-agent-guidance require --init for team join", nil)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runTeamJoin(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderTeamJoinResult(streams.Out, opts.JSON, result)
+	renderTeamJoinResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -124,6 +140,22 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 			"Ask a Propagate admin to run `propagate config push` after approval.",
 		},
 	}
+	if opts.IncludeInit {
+		initResult, err := runInitWithReader(initOptions{
+			globalOptions:       opts.globalOptions,
+			Handle:              opts.Handle,
+			DryRun:              opts.DryRun,
+			AgentGuidance:       opts.InitAgentGuidance,
+			SkipAgentGuidance:   opts.InitSkipGuidance,
+			ExistingProjectOnly: true,
+		}, streams, reader)
+		if err != nil {
+			return TeamJoinResult{}, err
+		}
+		result.InitIncluded = true
+		result.Init = &initResult
+		result.Warnings = append(result.Warnings, initResult.Warnings...)
+	}
 
 	identityDir, err := identity.Directory()
 	if err != nil {
@@ -135,7 +167,7 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		return TeamJoinResult{}, commandError(ExitValidationError, "identity_missing", "Cannot inspect local Propagate identity", err)
 	}
 	if !identityExists && strings.TrimSpace(opts.Handle) == "" {
-		handle, err := promptRequired(reader, streams.Out, opts.NonInteractive, "Handle (name or email)")
+		handle, err := promptRequired(reader, streams.In, streams.Out, opts.NonInteractive, "Handle (name or email)")
 		if err != nil {
 			return TeamJoinResult{}, err
 		}
@@ -167,6 +199,9 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		ident = ensured.Identity
 		result.IdentityCreated = ensured.Created
 		result.IdentityPath = ensured.Path
+	}
+	if result.Init != nil && result.Init.IdentityCreated {
+		result.IdentityCreated = true
 	}
 	summary := ident.Summary()
 	result.Identity = &summary
@@ -280,7 +315,7 @@ func (s scopeFlags) Map() (map[string]string, error) {
 	return out, nil
 }
 
-func renderTeamJoinResult(w io.Writer, jsonOutput bool, result TeamJoinResult) {
+func renderTeamJoinResult(w io.Writer, jsonOutput bool, noColor bool, result TeamJoinResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -288,13 +323,20 @@ func renderTeamJoinResult(w io.Writer, jsonOutput bool, result TeamJoinResult) {
 		return
 	}
 
-	if result.DryRun {
-		fmt.Fprintln(w, "Would add join request to propagate.yaml.")
-		fmt.Fprintln(w, "Mode: dry run; no files were written.")
-	} else {
-		fmt.Fprintln(w, "Join request added to propagate.yaml.")
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate team join", result.DryRun)
+	if result.InitIncluded {
+		renderOK(w, style, "Init completed before join.")
+		renderTeamJoinInitSummary(w, style, result.Init)
+		fmt.Fprintln(w)
 	}
-	fmt.Fprintln(w, "You do not have secret access yet.")
+	if result.DryRun {
+		renderNote(w, style, "Would add join request to propagate.yaml.")
+		renderNote(w, style, "Mode: dry run; no files were written.")
+	} else {
+		renderOK(w, style, "Join request added to propagate.yaml.")
+	}
+	renderNote(w, style, "You do not have secret access yet.")
 	fmt.Fprintln(w)
 
 	if result.Identity != nil {
@@ -318,24 +360,32 @@ func renderTeamJoinResult(w io.Writer, jsonOutput bool, result TeamJoinResult) {
 	if len(result.RequestedScopes) == 0 {
 		fmt.Fprintln(w, "Requested scopes: none specified")
 	} else {
-		fmt.Fprintln(w, "Requested scopes:")
+		fmt.Fprintln(w, style.bold("Requested scopes:"))
 		for _, scope := range sortedScopeNames(result.RequestedScopes) {
 			fmt.Fprintf(w, "  - %s: %s\n", scope, result.RequestedScopes[scope])
 		}
 	}
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
+}
+
+func renderTeamJoinInitSummary(w io.Writer, style outputStyle, result *InitResult) {
+	if result == nil {
+		return
 	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
+	switch {
+	case result.ProjectAlreadyConfigured:
+		renderOK(w, style, "Project config already existed.")
+	case result.ProjectCreated:
+		renderOK(w, style, "Project config was initialized.")
+	}
+	switch result.AgentGuidance.Status {
+	case "created", "updated", "unchanged":
+		renderOK(w, style, fmt.Sprintf("Agent guidance: %s.", result.AgentGuidance.Status))
+	case "failed":
+		renderWarning(w, style, "Agent guidance: failed.")
 	}
 }
 
@@ -367,6 +417,9 @@ func printTeamJoinHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --role VALUE             requested role: developers or admins")
 	fmt.Fprintln(w, "  --scope VALUE            requested scope, optionally scope=permission; may be repeated")
 	fmt.Fprintln(w, "  --dry-run                show what would happen without writing propagate.yaml")
+	fmt.Fprintln(w, "  --init                   run existing-project init before adding the join request")
+	fmt.Fprintln(w, "  --agent-guidance         with --init, create or update AGENTS.md guidance")
+	fmt.Fprintln(w, "  --skip-agent-guidance    with --init, skip AGENTS.md guidance")
 	fmt.Fprintln(w, "  --json                   render machine-readable JSON")
 	fmt.Fprintln(w, "  --non-interactive        fail instead of prompting")
 }

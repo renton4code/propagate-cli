@@ -55,11 +55,11 @@ func runConfigStatusCommand(args []string, global globalOptions, streams Streams
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid config status flags", err, "Run `propagate config status --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate config status does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runConfigStatus(opts, streams)
@@ -69,11 +69,11 @@ func runConfigStatusCommand(args []string, global globalOptions, streams Streams
 				renderConfigStatusError(streams.Err, result, err)
 				return errorExitCode(err)
 			}
-			renderConfigStatusResult(streams.Out, false, result)
+			renderConfigStatusResult(streams.Out, false, opts.NoColor, result)
 		}
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderConfigStatusResult(streams.Out, opts.JSON, result)
+	renderConfigStatusResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -124,7 +124,7 @@ func runConfigStatus(opts configStatusOptions, streams Streams) (ConfigStatusRes
 	summary := ident.Summary()
 	result.Identity = &summary
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		result.OK = false
 		result.Status = "cloud_unavailable"
@@ -246,20 +246,22 @@ func configStatusNextSteps(action string) []string {
 	}
 }
 
-func renderConfigStatusResult(w io.Writer, jsonOutput bool, result ConfigStatusResult) {
+func renderConfigStatusResult(w io.Writer, jsonOutput bool, noColor bool, result ConfigStatusResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate config status", false)
 	switch result.Status {
 	case "cloud_unavailable":
-		fmt.Fprintln(w, "Config local status available; cloud status unavailable.")
+		renderWarning(w, style, "Config local status available; cloud status unavailable.")
 	case "identity_missing":
-		fmt.Fprintln(w, "Config local status available; identity is missing.")
+		renderWarning(w, style, "Config local status available; identity is missing.")
 	default:
-		fmt.Fprintln(w, configStatusHeadline(result.State))
+		renderConfigStatusHeadline(w, style, result.State)
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -279,22 +281,24 @@ func renderConfigStatusResult(w io.Writer, jsonOutput bool, result ConfigStatusR
 		fmt.Fprintf(w, "Recommended action: %s\n", result.RecommendedAction)
 	}
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
-	renderConfigStatusList(w, "Local-only changes", result.LocalOnlyChanges)
-	renderConfigStatusList(w, "Cloud-only changes", result.CloudOnlyChanges)
+	renderConfigStatusList(w, style, "Local-only changes", result.LocalOnlyChanges)
+	renderConfigStatusList(w, style, "Cloud-only changes", result.CloudOnlyChanges)
 	if len(result.SafeSummary) > 0 {
-		renderConfigStatusList(w, "Cloud summary", configStatusSafeSummaryLines(result.SafeSummary))
+		renderConfigStatusList(w, style, "Cloud summary", configStatusSafeSummaryLines(result.SafeSummary))
 	}
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
+}
+
+func renderConfigStatusHeadline(w io.Writer, style outputStyle, state string) {
+	headline := configStatusHeadline(state)
+	switch state {
+	case "equal":
+		renderOK(w, style, headline)
+	case "local_ahead", "cloud_ahead", "conflict":
+		renderWarning(w, style, headline)
+	default:
+		renderNote(w, style, headline)
 	}
 }
 
@@ -313,14 +317,8 @@ func configStatusHeadline(state string) string {
 	}
 }
 
-func renderConfigStatusList(w io.Writer, label string, values []string) {
-	if len(values) == 0 {
-		return
-	}
-	fmt.Fprintf(w, "\n%s:\n", label)
-	for _, value := range values {
-		fmt.Fprintf(w, "- %s\n", value)
-	}
+func renderConfigStatusList(w io.Writer, style outputStyle, label string, values []string) {
+	renderListSection(w, style, label, values)
 }
 
 func configStatusSafeSummaryLines(summary map[string]any) []string {

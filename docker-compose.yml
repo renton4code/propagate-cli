@@ -1,0 +1,110 @@
+name: propagate-local
+
+x-supabase-postgres-image: &supabase-postgres-image supabase/postgres:15.14.1.107
+x-supabase-meta-image: &supabase-meta-image supabase/postgres-meta:v0.96.3
+x-supabase-studio-image: &supabase-studio-image supabase/studio:2026.04.27-sha-5f60601
+x-propagate-database-url: &propagate-database-url postgres://postgres:postgres@supabase-db:5432/postgres?sslmode=disable
+
+services:
+  supabase-db:
+    image: *supabase-postgres-image
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${PROPAGATE_DB_PORT:-55432}:5432"
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  supabase-meta:
+    image: *supabase-meta-image
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: "8080"
+      PG_META_DB_HOST: supabase-db
+      PG_META_DB_PORT: "5432"
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: postgres
+      CRYPTO_KEY: "${SUPABASE_PG_META_CRYPTO_KEY:-propagate-local-pg-meta-key}"
+
+  supabase-studio:
+    image: *supabase-studio-image
+    depends_on:
+      supabase-meta:
+        condition: service_started
+      supabase-db:
+        condition: service_healthy
+    environment:
+      HOSTNAME: "0.0.0.0"
+      STUDIO_PG_META_URL: http://supabase-meta:8080
+      POSTGRES_HOST: supabase-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PG_META_CRYPTO_KEY: "${SUPABASE_PG_META_CRYPTO_KEY:-propagate-local-pg-meta-key}"
+      DEFAULT_ORGANIZATION_NAME: Propagate Local
+      DEFAULT_PROJECT_NAME: Propagate
+      SUPABASE_URL: http://localhost:${SUPABASE_STUDIO_PORT:-54323}
+      SUPABASE_PUBLIC_URL: http://localhost:${SUPABASE_STUDIO_PORT:-54323}
+      NEXT_PUBLIC_ENABLE_LOGS: "false"
+      SNIPPETS_MANAGEMENT_FOLDER: /app/snippets
+      EDGE_FUNCTIONS_MANAGEMENT_FOLDER: /app/edge-functions
+    volumes:
+      - supabase-studio-snippets:/app/snippets
+      - supabase-studio-functions:/app/edge-functions
+    ports:
+      - "${SUPABASE_STUDIO_PORT:-54323}:3000"
+
+  propagate-migrate:
+    image: *supabase-postgres-image
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      PROPAGATE_DATABASE_URL: *propagate-database-url
+    volumes:
+      - ./packages/backend/migrations:/migrations:ro
+    command:
+      - sh
+      - -ec
+      - psql "$$PROPAGATE_DATABASE_URL" -v ON_ERROR_STOP=1 -f /migrations/0001_init_schema.sql
+    restart: "no"
+
+  propagate-api:
+    build:
+      context: ./packages/backend
+    env_file:
+      - path: ./packages/backend/.env
+        required: false
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+      propagate-migrate:
+        condition: service_completed_successfully
+    environment:
+      PORT: "8080"
+      PROPAGATE_API_VERSION: 0.1.0-dev
+      PROPAGATE_MIN_CLI_VERSION: 0.1.0-dev
+      PROPAGATE_REQUEST_SKEW_SECONDS: "300"
+      PROPAGATE_MAX_BODY_BYTES: "4194304"
+      PROPAGATE_DATABASE_URL: *propagate-database-url
+    ports:
+      - "${PROPAGATE_API_PORT:-8080}:8080"
+
+volumes:
+  supabase-db-data:
+  supabase-studio-snippets:
+  supabase-studio-functions:

@@ -73,18 +73,18 @@ func runEnvStatusCommand(args []string, global globalOptions, streams Streams) i
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid env status flags", err, "Run `propagate env status --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate env status does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runEnvStatus(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderEnvStatusResult(streams.Out, opts.JSON, result)
+	renderEnvStatusResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -135,7 +135,7 @@ func runEnvStatus(opts envStatusOptions, streams Streams) (EnvStatusResult, erro
 		return EnvStatusResult{}, commandError(ExitValidationError, "scope_not_found", fmt.Sprintf("Scope %q is not configured in propagate.yaml", scopeName), nil, "Run `propagate config pull` if the scope was added in the cloud.")
 	}
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return EnvStatusResult{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for env status", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
@@ -381,18 +381,20 @@ func mapEnvStatusAPIError(err error, scope string, ident identity.Summary) error
 	}
 }
 
-func renderEnvStatusResult(w io.Writer, jsonOutput bool, result EnvStatusResult) {
+func renderEnvStatusResult(w io.Writer, jsonOutput bool, noColor bool, result EnvStatusResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate env status", false)
 	switch result.Status {
 	case "no_change":
-		fmt.Fprintln(w, "No env values stored for this scope.")
+		renderNote(w, style, "No env values stored for this scope.")
 	default:
-		fmt.Fprintln(w, "Env status complete.")
+		renderOK(w, style, "Env status complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -410,7 +412,7 @@ func renderEnvStatusResult(w io.Writer, jsonOutput bool, result EnvStatusResult)
 	}
 	fmt.Fprintf(w, "Can read: %t\n", result.CanRead)
 	if len(result.Variables) > 0 {
-		fmt.Fprintln(w, "Variables:")
+		fmt.Fprintln(w, style.bold("Variables:"))
 		for _, item := range result.Variables {
 			display := item.Name
 			if item.MaskedValue != "" {
@@ -433,18 +435,8 @@ func renderEnvStatusResult(w io.Writer, jsonOutput bool, result EnvStatusResult)
 		fmt.Fprintln(w)
 	}
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
 func printEnvStatusHelp(w io.Writer) {

@@ -72,18 +72,18 @@ func runConfigPullCommand(args []string, global globalOptions, streams Streams) 
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid config pull flags", err, "Run `propagate config pull --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate config pull does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runConfigPull(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderConfigPullResult(streams.Out, opts.JSON, result)
+	renderConfigPullResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -131,7 +131,7 @@ func runConfigPull(opts configPullOptions, streams Streams) (ConfigPullResult, e
 	}
 	result.LocalConfigHash = localHash
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return ConfigPullResult{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for config pull", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
@@ -184,7 +184,7 @@ func runConfigPull(opts configPullOptions, streams Streams) (ConfigPullResult, e
 		if opts.NonInteractive {
 			return ConfigPullResult{}, commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive config pull requires --yes before overwriting local config changes", nil, "Re-run with `--yes` after reviewing `propagate config pull --dry-run`.")
 		}
-		ok, err := promptConfirm(reader, streams.Out, "Overwrite local propagate.yaml with the cloud config?", false)
+		ok, err := promptConfirm(reader, streams.In, streams.Out, "Overwrite local propagate.yaml with the cloud config?", false)
 		if err != nil {
 			return ConfigPullResult{}, err
 		}
@@ -355,20 +355,22 @@ func joinMap(joins []config.JoinRequest) map[string]config.JoinRequest {
 	return out
 }
 
-func renderConfigPullResult(w io.Writer, jsonOutput bool, result ConfigPullResult) {
+func renderConfigPullResult(w io.Writer, jsonOutput bool, noColor bool, result ConfigPullResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate config pull", result.DryRun)
 	switch result.Status {
 	case "dry_run":
-		fmt.Fprintln(w, "Config pull dry run complete.")
+		renderNote(w, style, "Config pull dry run complete.")
 	case "no_change":
-		fmt.Fprintln(w, "Config already matches the cloud.")
+		renderNote(w, style, "Config already matches the cloud.")
 	default:
-		fmt.Fprintln(w, "Config pull complete.")
+		renderOK(w, style, "Config pull complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -384,27 +386,17 @@ func renderConfigPullResult(w io.Writer, jsonOutput bool, result ConfigPullResul
 	fmt.Fprintf(w, "Updated: %t\n", result.Updated)
 	fmt.Fprintf(w, "Would overwrite local changes: %t\n", result.WouldOverwrite)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
-	renderConfigPullChanges(w, result.Changes)
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderConfigPullChanges(w, style, result.Changes)
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
-func renderConfigPullChanges(w io.Writer, changes ConfigPullChangeSummary) {
+func renderConfigPullChanges(w io.Writer, style outputStyle, changes ConfigPullChangeSummary) {
 	lines := configPullChangeLines(changes)
 	if len(lines) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nChanges:")
+	fmt.Fprintf(w, "\n%s\n", style.bold("Changes:"))
 	for _, line := range lines {
 		fmt.Fprintf(w, "- %s\n", line)
 	}

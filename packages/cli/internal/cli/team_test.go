@@ -70,6 +70,106 @@ func TestTeamJoinAddsPendingRequest(t *testing.T) {
 	}
 }
 
+func TestTeamJoinWithInitRunsExistingProjectInit(t *testing.T) {
+	repo := initGitRepo(t)
+	adminHome := t.TempDir()
+	t.Setenv("HOME", adminHome)
+
+	var initStdout, initStderr bytes.Buffer
+	code := Run([]string{
+		"init",
+		"--handle", "alice@example.com",
+		"--team-name", "Acme API",
+		"--yes",
+		"--non-interactive",
+		"--skip-agent-guidance",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &initStdout,
+		Err:     &initStderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
+	}
+
+	devHome := t.TempDir()
+	t.Setenv("HOME", devHome)
+	var stdout, stderr bytes.Buffer
+	code = Run([]string{
+		"team", "join",
+		"--init",
+		"--handle", "bob@example.com",
+		"--scope", "dev=read",
+		"--agent-guidance",
+		"--non-interactive",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("team join --init exit = %d, stderr:\n%s", code, stderr.String())
+	}
+
+	configText := readConfig(t, repo)
+	for _, want := range []string{
+		`handle: "bob@example.com"`,
+		`requested_scopes:`,
+		`dev: read`,
+	} {
+		if !strings.Contains(configText, want) {
+			t.Fatalf("propagate.yaml missing %q:\n%s", want, configText)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(devHome, ".propagate", "identity")); err != nil {
+		t.Fatalf("team join --init did not create identity: %v", err)
+	}
+	agentGuidance, err := os.ReadFile(filepath.Join(repo, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agentGuidance), "Template: propagate-agent-guidance-v1") {
+		t.Fatalf("AGENTS.md missing Propagate guidance:\n%s", agentGuidance)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Init completed before join.",
+		"Agent guidance: created.",
+		"Join request added to propagate.yaml.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("team join --init output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestTeamJoinGuidanceFlagsRequireInit(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"team", "join",
+		"--handle", "bob@example.com",
+		"--agent-guidance",
+		"--non-interactive",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitUsageError {
+		t.Fatalf("team join exit = %d, want %d; stderr:\n%s", code, ExitUsageError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "require --init") {
+		t.Fatalf("expected --init requirement error, got:\n%s", stderr.String())
+	}
+}
+
 func TestTeamJoinRejectsDuplicatePendingRequest(t *testing.T) {
 	repo := initRepoAndJoinOnce(t)
 

@@ -12,12 +12,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"propagate/cli/internal/apiclient"
 	"propagate/cli/internal/config"
+	"propagate/cli/internal/envfile"
 	"propagate/cli/internal/gitutil"
 	"propagate/cli/internal/identity"
 	"propagate/cli/internal/secretcrypto"
@@ -80,12 +82,14 @@ func runConfigCommand(args []string, global globalOptions, streams Streams) int 
 		return runConfigPullCommand(args[1:], global, streams)
 	case "push":
 		return runConfigPushCommand(args[1:], global, streams)
+	case "edit":
+		return runConfigEditCommand(args[1:], global, streams)
 	case "help", "--help", "-h":
 		printConfigHelp(streams.Out)
 		return ExitSuccess
 	default:
 		err := commandError(ExitUsageError, "usage_error", fmt.Sprintf("Unknown config command %q", args[0]), nil, "Run `propagate config help` to see available config commands.")
-		return renderError(streams.Err, global.JSON, err)
+		return renderError(streams.Err, global.JSON, global.NoColor, err)
 	}
 }
 
@@ -106,18 +110,18 @@ func runConfigPushCommand(args []string, global globalOptions, streams Streams) 
 			return ExitSuccess
 		}
 		cmdErr := commandError(ExitUsageError, "usage_error", "Invalid config push flags", err, "Run `propagate config push --help` for usage.")
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate config push does not accept positional arguments", nil)
-		return renderError(streams.Err, opts.JSON, cmdErr)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
 	result, err := runConfigPush(opts, streams)
 	if err != nil {
-		return renderError(streams.Err, opts.JSON, err)
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	renderConfigPushResult(streams.Out, opts.JSON, result)
+	renderConfigPushResult(streams.Out, opts.JSON, opts.NoColor, result)
 	return ExitSuccess
 }
 
@@ -174,7 +178,7 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 	}
 	result.LocalConfigHash = localHash
 
-	apiURL := resolveAPIURL(opts.APIURL)
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return ConfigPushResult{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for config push", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
@@ -198,7 +202,7 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 		return ConfigPushResult{}, commandError(ExitConflict, "revision_conflict", "Local config is not based on the current cloud revision", nil, "Run `propagate config pull`, review the diff, and retry config push.")
 	}
 
-	decisions, err := collectJoinDecisions(opts, reader, streams.Out, project.PendingJoins)
+	decisions, err := collectJoinDecisions(opts, reader, streams.In, streams.Out, project.PendingJoins)
 	if err != nil {
 		return ConfigPushResult{}, err
 	}
@@ -219,31 +223,29 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 		result.NextSteps = []string{"Skipped joins remain pending in propagate.yaml. Re-run config push when an admin is ready to approve or decline them."}
 		return result, nil
 	}
+	var targetEnvelopes []apiclient.ScopeKeyEnvelope
 	if len(approved) > 0 {
 		envelopes, err := buildApprovedJoinEnvelopes(context.Background(), client, ident, project, approved)
 		if err != nil {
 			return ConfigPushResult{}, err
 		}
-		result.EnvelopesUploadedCount = len(envelopes)
-		targetEnvelopes := envelopes
-		if opts.DryRun {
-			result.Status = "dry_run"
-			result.BackendStatus = "validated"
-			result.ConfigModified = len(approved)+len(declined) > 0
-			result.NextSteps = []string{"Re-run without `--dry-run` and with `--yes` after reviewing the decision summary."}
-			return result, nil
-		}
-		return pushConfigDecisions(opts, streams, reader, client, ident, configPath, project, target, approved, declined, skipped, targetEnvelopes, &result)
+		targetEnvelopes = append(targetEnvelopes, envelopes...)
 	}
+	newScopeEnvelopes, err := buildNewScopeEnvelopesIfNeeded(context.Background(), client, ident, project, target, status)
+	if err != nil {
+		return ConfigPushResult{}, err
+	}
+	targetEnvelopes = append(targetEnvelopes, newScopeEnvelopes...)
+	result.EnvelopesUploadedCount = len(targetEnvelopes)
 
 	if opts.DryRun {
 		result.Status = "dry_run"
 		result.BackendStatus = "validated"
-		result.ConfigModified = len(approved)+len(declined) > 0
+		result.ConfigModified = status.State == "local_ahead" || len(approved)+len(declined) > 0
 		result.NextSteps = []string{"Re-run without `--dry-run` and with `--yes` after reviewing the decision summary."}
 		return result, nil
 	}
-	return pushConfigDecisions(opts, streams, reader, client, ident, configPath, project, target, approved, declined, skipped, nil, &result)
+	return pushConfigDecisions(opts, streams, reader, client, ident, configPath, project, target, approved, declined, skipped, targetEnvelopes, &result)
 }
 
 func pushConfigDecisions(
@@ -265,7 +267,7 @@ func pushConfigDecisions(
 		return ConfigPushResult{}, commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive config push requires --yes", nil, "Re-run with `--yes` after reviewing the pending config decisions.")
 	}
 	if !opts.NonInteractive && !opts.Yes {
-		ok, err := promptConfirm(reader, streams.Out, "Push accepted config decisions to the cloud?", false)
+		ok, err := promptConfirm(reader, streams.In, streams.Out, "Push accepted config decisions to the cloud?", false)
 		if err != nil {
 			return ConfigPushResult{}, err
 		}
@@ -373,6 +375,105 @@ func buildApprovedJoinEnvelopes(ctx context.Context, client apiclient.Client, id
 	return envelopes, nil
 }
 
+func buildNewScopeEnvelopesIfNeeded(ctx context.Context, client apiclient.Client, ident identity.Identity, project config.ParsedProject, target config.ParsedProject, status apiclient.ConfigStatusData) ([]apiclient.ScopeKeyEnvelope, error) {
+	cloudScopeCount, ok := safeSummaryInt(status.SafeSummary, "scopes_count")
+	if !ok || len(target.Scopes) <= cloudScopeCount {
+		return nil, nil
+	}
+	cloudConfig, err := client.GetConfig(ctx, ident, project.TeamID)
+	if err != nil {
+		return nil, mapAPIError(err, "Cannot fetch current cloud config before creating scope envelopes")
+	}
+	if cloudConfig.ConfigRevision != "" && cloudConfig.ConfigRevision != project.CloudRevision {
+		return nil, commandError(
+			ExitConflict,
+			"revision_conflict",
+			"Cloud config revision changed while preparing new scope envelopes",
+			nil,
+			"Run `propagate config pull`, review the diff, and retry config push.",
+		)
+	}
+	cloudProject, err := config.ParseSnapshot(cloudConfig.ConfigSnapshot, cloudConfig.ConfigRevision)
+	if err != nil {
+		return nil, commandError(ExitValidationError, "config_invalid", "Cannot parse current cloud config before creating scope envelopes", err)
+	}
+	cloudScopes := map[string]bool{}
+	for _, scope := range cloudProject.Scopes {
+		cloudScopes[scope.Name] = true
+	}
+
+	var envelopes []apiclient.ScopeKeyEnvelope
+	for _, scope := range target.Scopes {
+		if cloudScopes[scope.Name] {
+			continue
+		}
+		scopeKey, err := secretcrypto.GenerateScopeKey()
+		if err != nil {
+			return nil, commandError(ExitInternalError, "internal_error", fmt.Sprintf("Cannot create scope key for %q", scope.Name), err)
+		}
+		for _, member := range target.Members {
+			if !scopeMemberCanRead(scope, member) {
+				continue
+			}
+			encryptedScopeKey, err := secretcrypto.EncryptScopeKey(scopeKey, member.EncryptionPublicKey, scope.Name, member.PublicKeySHA, 1)
+			if err != nil {
+				return nil, commandError(ExitValidationError, "config_invalid", fmt.Sprintf("Cannot encrypt scope key for member %s", member.PublicKeySHA), err)
+			}
+			envelopes = append(envelopes, apiclient.ScopeKeyEnvelope{
+				Scope:             scope.Name,
+				RecipientKeySHA:   member.PublicKeySHA,
+				ScopeKeyVersion:   1,
+				EncryptedScopeKey: encryptedScopeKey,
+				Algorithm:         secretcrypto.EnvelopeAlgorithm,
+			})
+		}
+	}
+	return envelopes, nil
+}
+
+func safeSummaryInt(summary map[string]any, key string) (int, bool) {
+	if summary == nil {
+		return 0, false
+	}
+	switch value := summary[key].(type) {
+	case int:
+		return value, true
+	case int64:
+		return int(value), true
+	case float64:
+		return int(value), true
+	case json.Number:
+		parsed, err := value.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(parsed), true
+	default:
+		return 0, false
+	}
+}
+
+func scopeMemberCanRead(scope config.ScopeSummary, member config.Member) bool {
+	permission := scope.DefaultRoleAccess[member.Role]
+	if permission == "" && member.Role == "admins" {
+		permission = "admin"
+	}
+	return permissionRank(permission) >= permissionRank("read")
+}
+
+func permissionRank(permission string) int {
+	switch permission {
+	case "admin":
+		return 3
+	case "write":
+		return 2
+	case "read":
+		return 1
+	default:
+		return 0
+	}
+}
+
 func (f *decisionFlags) String() string {
 	if f == nil {
 		return ""
@@ -389,7 +490,7 @@ func (f *decisionFlags) Set(value string) error {
 	return nil
 }
 
-func collectJoinDecisions(opts configPushOptions, reader *bufio.Reader, out io.Writer, joins []config.JoinRequest) (map[string]string, error) {
+func collectJoinDecisions(opts configPushOptions, reader *bufio.Reader, in io.Reader, out io.Writer, joins []config.JoinRequest) (map[string]string, error) {
 	decisions, err := explicitJoinDecisions(opts)
 	if err != nil {
 		return nil, commandError(ExitUsageError, "usage_error", "Invalid config push decisions", err)
@@ -410,7 +511,7 @@ func collectJoinDecisions(opts configPushOptions, reader *bufio.Reader, out io.W
 		if opts.NonInteractive {
 			return nil, commandError(ExitConfirmationRequired, "confirmation_required", "Every pending join needs an explicit approve, decline, or skip decision in non-interactive mode", nil, "Pass --approve-join, --decline-join, or --skip-join for each pending public_key_sha.")
 		}
-		decision, err := promptJoinDecision(reader, out, join)
+		decision, err := promptJoinDecision(reader, in, out, join)
 		if err != nil {
 			return nil, err
 		}
@@ -442,7 +543,24 @@ func explicitJoinDecisions(opts configPushOptions) (map[string]string, error) {
 	return out, nil
 }
 
-func promptJoinDecision(reader *bufio.Reader, out io.Writer, join config.JoinRequest) (string, error) {
+func promptJoinDecision(reader *bufio.Reader, in io.Reader, out io.Writer, join config.JoinRequest) (string, error) {
+	if promptCanUseTUI(in, out) {
+		return promptChoiceTUI(
+			in,
+			out,
+			"Pending join request",
+			[]string{
+				fmt.Sprintf("Handle: %s", join.Handle),
+				fmt.Sprintf("Public key: %s", join.PublicKeySHA),
+			},
+			[]tuiChoice{
+				{Key: "a", Label: "Approve", Value: "approve"},
+				{Key: "d", Label: "Decline", Value: "decline"},
+				{Key: "s", Label: "Skip", Value: "skip"},
+			},
+			2,
+		)
+	}
 	for {
 		fmt.Fprintf(out, "Pending join %s (%s). Approve, decline, or skip? [a/d/s]: ", join.Handle, join.PublicKeySHA)
 		value, err := reader.ReadString('\n')
@@ -550,11 +668,81 @@ func findMember(members []config.Member, publicKeySHA string) *config.Member {
 	return nil
 }
 
-func resolveAPIURL(flagValue string) string {
+func resolveAPIURL(flagValue string, workDirs ...string) string {
 	if value := strings.TrimSpace(flagValue); value != "" {
 		return value
 	}
-	return strings.TrimSpace(os.Getenv("PROPAGATE_API_URL"))
+	if value := strings.TrimSpace(os.Getenv("PROPAGATE_API_URL")); value != "" {
+		return value
+	}
+	return resolveAPIURLFromDotenv(workDirs...)
+}
+
+func resolveAPIURLFromDotenv(workDirs ...string) string {
+	for _, path := range apiURLDotenvCandidates(workDirs...) {
+		parsed, err := envfile.ParseAssignments(path)
+		if err != nil {
+			continue
+		}
+		if value := strings.TrimSpace(parsed.Values["PROPAGATE_API_URL"]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func loadLocalDotenv(workDir string) {
+	for _, path := range apiURLDotenvCandidates(workDir) {
+		parsed, err := envfile.ParseAssignments(path)
+		if err != nil {
+			continue
+		}
+		for name, value := range parsed.Values {
+			if !strings.HasPrefix(name, "PROPAGATE_") {
+				continue
+			}
+			if _, exists := os.LookupEnv(name); exists {
+				continue
+			}
+			_ = os.Setenv(name, value)
+		}
+	}
+}
+
+func apiURLDotenvCandidates(workDirs ...string) []string {
+	var candidates []string
+	seen := map[string]bool{}
+	add := func(path string) {
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		candidates = append(candidates, path)
+	}
+	addDir := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		add(filepath.Join(dir, ".env"))
+		add(filepath.Join(dir, "packages", "backend", ".env"))
+		if worktree, err := gitutil.Discover(dir); err == nil {
+			add(filepath.Join(worktree.Root, ".env"))
+			add(filepath.Join(worktree.Root, "packages", "backend", ".env"))
+		}
+	}
+	for _, dir := range workDirs {
+		addDir(dir)
+	}
+	if len(workDirs) == 0 {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return candidates
+		}
+		addDir(cwd)
+	}
+	return candidates
 }
 
 func operationID(prefix string) (string, error) {
@@ -586,20 +774,22 @@ func mapAPIError(err error, message string) error {
 	}
 }
 
-func renderConfigPushResult(w io.Writer, jsonOutput bool, result ConfigPushResult) {
+func renderConfigPushResult(w io.Writer, jsonOutput bool, noColor bool, result ConfigPushResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(result)
 		return
 	}
+	style := newOutputStyle(noColor)
+	renderCommandTitle(w, style, "Propagate config push", result.DryRun)
 	switch result.Status {
 	case "dry_run":
-		fmt.Fprintln(w, "Config push dry run complete.")
+		renderNote(w, style, "Config push dry run complete.")
 	case "no_change":
-		fmt.Fprintln(w, "Config already matches the cloud.")
+		renderNote(w, style, "Config already matches the cloud.")
 	default:
-		fmt.Fprintln(w, "Config push complete.")
+		renderOK(w, style, "Config push complete.")
 	}
 	fmt.Fprintln(w)
 	if result.TeamName != "" {
@@ -617,28 +807,18 @@ func renderConfigPushResult(w io.Writer, jsonOutput bool, result ConfigPushResul
 	fmt.Fprintf(w, "Encrypted access envelopes uploaded: %d\n", result.EnvelopesUploadedCount)
 	fmt.Fprintf(w, "propagate.yaml modified: %t\n", result.ConfigModified)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
-	renderJoinDecisionDetails(w, "Approved", result.ApprovedJoins)
-	renderJoinDecisionDetails(w, "Declined", result.DeclinedJoins)
-	renderJoinDecisionDetails(w, "Skipped", result.SkippedJoins)
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
-		for _, warning := range result.Warnings {
-			fmt.Fprintf(w, "- %s\n", warning)
-		}
-	}
-	if len(result.NextSteps) > 0 {
-		fmt.Fprintln(w, "\nNext steps:")
-		for i, step := range result.NextSteps {
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
-	}
+	renderJoinDecisionDetails(w, style, "Approved", result.ApprovedJoins)
+	renderJoinDecisionDetails(w, style, "Declined", result.DeclinedJoins)
+	renderJoinDecisionDetails(w, style, "Skipped", result.SkippedJoins)
+	renderWarnings(w, style, result.Warnings)
+	renderNextSteps(w, style, result.NextSteps)
 }
 
-func renderJoinDecisionDetails(w io.Writer, label string, joins []JoinDecision) {
+func renderJoinDecisionDetails(w io.Writer, style outputStyle, label string, joins []JoinDecision) {
 	if len(joins) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "%s joins:\n", label)
+	fmt.Fprintln(w, style.bold(label+" joins:"))
 	for _, join := range joins {
 		fmt.Fprintf(w, "  - %s (%s), role %s", join.Handle, join.PublicKeySHA, join.Role)
 		if len(join.Scopes) > 0 {
@@ -673,11 +853,13 @@ func printConfigHelp(w io.Writer) {
 	fmt.Fprintln(w, "  propagate config status [flags]")
 	fmt.Fprintln(w, "  propagate config pull [flags]")
 	fmt.Fprintln(w, "  propagate config push [flags]")
+	fmt.Fprintln(w, "  propagate config edit [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  status    compare local config metadata with cloud state")
 	fmt.Fprintln(w, "  pull      pull cloud config state into propagate.yaml")
 	fmt.Fprintln(w, "  push      push approved propagate.yaml config decisions to the cloud")
+	fmt.Fprintln(w, "  edit      open an interactive editor for variable declarations")
 }
 
 func printConfigPushHelp(w io.Writer) {

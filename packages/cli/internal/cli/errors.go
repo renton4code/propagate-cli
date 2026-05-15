@@ -46,7 +46,7 @@ func commandError(code int, symbol, message string, err error, nextSteps ...stri
 	}
 }
 
-func renderError(w io.Writer, jsonOutput bool, err error) int {
+func renderError(w io.Writer, jsonOutput bool, noColor bool, err error) int {
 	cmdErr, ok := err.(*CommandError)
 	if !ok {
 		cmdErr = commandError(ExitInternalError, "internal_error", "Unexpected internal error", err)
@@ -61,16 +61,12 @@ func renderError(w io.Writer, jsonOutput bool, err error) int {
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(payload)
 	} else {
-		fmt.Fprintf(w, "Error: %s\n", cmdErr.Message)
+		style := newOutputStyle(noColor)
+		fmt.Fprintf(w, "%s Error: %s\n", style.warn(), cmdErr.Message)
 		if cmdErr.Err != nil {
 			fmt.Fprintf(w, "Detail: %s\n", cmdErr.Err)
 		}
-		for i, step := range cmdErr.NextSteps {
-			if i == 0 {
-				fmt.Fprintln(w, "\nNext steps:")
-			}
-			fmt.Fprintf(w, "%d. %s\n", i+1, step)
-		}
+		renderNextSteps(w, style, cmdErr.NextSteps)
 	}
 	return cmdErr.Code
 }

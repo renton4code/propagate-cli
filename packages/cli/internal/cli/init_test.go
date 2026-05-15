@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -271,11 +272,30 @@ func TestInitUploadsEncryptedSetupWhenAPIURLConfigured(t *testing.T) {
 	if strings.Contains(configText, databaseURL) || strings.Contains(configText, publicFlag) {
 		t.Fatalf("propagate.yaml leaked env value:\n%s", configText)
 	}
+	if strings.Contains(stdout.String(), databaseURL) ||
+		strings.Contains(stdout.String(), publicFlag) ||
+		strings.Contains(stderr.String(), databaseURL) ||
+		strings.Contains(stderr.String(), publicFlag) {
+		t.Fatalf("command output leaked env value\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
 	if !strings.Contains(configText, `digest: "hmac-sha-256:v1:`) || !strings.Contains(configText, `name: "DATABASE_URL"`) {
 		t.Fatalf("propagate.yaml missing variable digest declarations:\n%s", configText)
 	}
-	if !strings.Contains(stdout.String(), "Variables encrypted/uploaded: 2") {
-		t.Fatalf("stdout missing encrypted upload count:\n%s", stdout.String())
+	for _, want := range []string{
+		"Scanning repository for .env files...",
+		"Found .env (2 variables) scope: dev",
+		"DATABASE_URL p**p scope: dev",
+		"PUBLIC_FLAG p**l scope: dev",
+		"Encrypting 2 variables for scope: dev...",
+		"Uploaded to cloud (2 variables)",
+		"propagate.yaml written (rev_00001)",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), "\x1b[32m✓\x1b[0m Uploaded to cloud") {
+		t.Fatalf("stdout missing colored success marker:\n%s", stdout.String())
 	}
 }
 
@@ -341,6 +361,84 @@ func TestInitNonInteractiveRequiresHandleForNewIdentity(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Handle") {
 		t.Fatalf("expected handle error, got:\n%s", stderr.String())
+	}
+}
+
+func TestMaybeApplyAgentGuidanceDefaultsToYes(t *testing.T) {
+	repo := t.TempDir()
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	var stdout bytes.Buffer
+
+	result, warnings := maybeApplyAgentGuidance(initOptions{}, Streams{Out: &stdout}, reader, repo)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if result.Status != "created" {
+		t.Fatalf("status = %q, want created", result.Status)
+	}
+	if !strings.Contains(stdout.String(), "Add Propagate guidance to AGENTS.md? [Y/n]: ") {
+		t.Fatalf("prompt did not show default yes:\n%s", stdout.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(repo, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Template: propagate-agent-guidance-v1") {
+		t.Fatalf("AGENTS.md missing Propagate guidance:\n%s", data)
+	}
+}
+
+func TestMaybeApplyAgentGuidanceCanSkipWithNo(t *testing.T) {
+	repo := t.TempDir()
+	reader := bufio.NewReader(strings.NewReader("n\n"))
+	var stdout bytes.Buffer
+
+	result, warnings := maybeApplyAgentGuidance(initOptions{}, Streams{Out: &stdout}, reader, repo)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if result.Status != "skipped" {
+		t.Fatalf("status = %q, want skipped", result.Status)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md stat err = %v, want not exists", err)
+	}
+}
+
+func TestRenderInitResultHonorsNoColor(t *testing.T) {
+	var stdout bytes.Buffer
+	renderInitResult(&stdout, false, true, InitResult{
+		IdentityCreated:        true,
+		IdentityPath:           "/tmp/home/.propagate/identity",
+		ProjectCreated:         true,
+		ProjectConfigPath:      "/tmp/repo/propagate.yaml",
+		ConfigRevision:         config.LocalRevision,
+		BackendStatus:          "not_configured_local_only",
+		VariablesUploadedCount: 0,
+	})
+
+	output := stdout.String()
+	if strings.Contains(output, "\x1b[") {
+		t.Fatalf("output contained ANSI color despite noColor:\n%s", output)
+	}
+	if !strings.Contains(output, "✓ propagate.yaml written") {
+		t.Fatalf("output missing success marker:\n%s", output)
+	}
+}
+
+func TestInitMaskValueAlwaysUsesTwoStars(t *testing.T) {
+	tests := map[string]string{
+		"":       "",
+		"a":      "**",
+		"ab":     "a**",
+		"abc":    "a**c",
+		"abcdef": "a**f",
+	}
+	for value, want := range tests {
+		if got := initMaskValue(value); got != want {
+			t.Fatalf("initMaskValue(%q) = %q, want %q", value, got, want)
+		}
 	}
 }
 

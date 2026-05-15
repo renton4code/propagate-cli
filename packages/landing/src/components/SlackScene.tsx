@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
  * Scroll-driven Slack mockup — neo-brutalism edition.
  */
 
-const INCOMING = "@here, I see we added STRIPE_SECRET_KEY, can smb share it for test account? 🙏";
-const DRAFT_1 = "I sent 1Password link in #backend channel yesterday, let me find the link...";
-const DRAFT_2 = "Just run `propagate env pull` to pull up-to-date env variables!";
-const TYPO_DRAFT = "Im so done with this shi";
+const INCOMING = "@here just pulled main and the app won't start — missing STRIPE_SECRET_KEY and REDIS_URL. Can someone send me the latest .env?";
+const DRAFT_1 = "Check #dev-onboarding, I think Sarah posted a 1Password link last week but it might be exp";
+const DRAFT_2 = "Pull the latest .env with propagate — everyone gets updated vars automatically and securely.";
+const TYPO_DRAFT = "hang on let me get send you the";
 const TYPO_BACKTO = 0;
 
 function buildKeystrokeWeights(text: string): number[] {
@@ -116,7 +116,7 @@ export function SlackScene() {
   }, []);
 
   const { incomingVisible, draft, isTyping } = computeState(progress);
-  const showCaret = progress > 0.08 && progress < 0.97;
+  const showCaret = draft.length > 0;
 
   return (
     <div ref={wrapperRef} className="relative" style={{ height: "360vh" }}>
@@ -154,7 +154,7 @@ export function SlackScene() {
         <div aria-hidden className="mesh-bg" style={{ position: "absolute", inset: 0, zIndex: 0 }} />
 
         <div
-          className="grid w-full items-center gap-12"
+          className="grid w-full items-center gap-10"
           style={{
             position: "relative",
             zIndex: 1,
@@ -162,8 +162,8 @@ export function SlackScene() {
             gridTemplateColumns: "1fr",
           }}
         >
-          <style>{`@media(min-width:1024px){.slack-grid{grid-template-columns:1fr 1.2fr!important}}`}</style>
-          <div className="slack-grid grid w-full items-center gap-12" style={{ gridTemplateColumns: "1fr" }}>
+          <style>{`@media(min-width:1024px){.slack-grid{grid-template-columns:0.7fr 1.3fr!important}}`}</style>
+          <div className="slack-grid grid w-full items-center gap-10" style={{ gridTemplateColumns: "1fr" }}>
             {/* Left: headline */}
             <div>
               <div
@@ -174,14 +174,13 @@ export function SlackScene() {
               </div>
               <h2
                 className="font-extrabold leading-none"
-                style={{ fontSize: "clamp(2.5rem,6vw,4.5rem)", letterSpacing: "-0.03em", color: "#fff" }}
+                style={{ fontSize: "clamp(2rem,4.5vw,3.2rem)", letterSpacing: "-0.03em", color: "#fff" }}
               >
                 .env over Slack&nbsp;<br />
                 <span style={{ color: "#FFE500" }}>Never </span><span style={{ color: "#FFE500", fontFamily: "'Instrument Serif','Iowan Old Style',Georgia,serif", fontStyle: "italic", fontWeight: 400, fontSize: "1.05em", background: "rgba(255,229,0,0.2)", padding: "0 0.15em" }}>again</span>
               </h2>
-              <p className="mt-6 max-w-md text-base leading-relaxed" style={{ color: "#888" }}>
-                Everytime your team sets a new variable, it's a hussle to securely share it to everyone.
-                Propagate makes secrets a CLI command, not a conversation.
+              <p className="mt-5 max-w-sm text-sm leading-relaxed" style={{ color: "#888" }}>
+                Every time someone adds a new secret, your team scrambles — DMs, expired 1Password links, pinned messages from months ago. Propagate makes sharing secrets a single CLI command.
               </p>
             </div>
 
@@ -228,18 +227,18 @@ function SlackMock({
           <span style={{ height: 12, width: 12, borderRadius: "50%", background: "#ffbd2e", display: "inline-block" }} />
           <span style={{ height: 12, width: 12, borderRadius: "50%", background: "#28c840", display: "inline-block" }} />
           <div style={{ marginLeft: 16, display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "#FFE500", fontWeight: 800 }}>#</span>
-            <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>dev</span>
-            <span style={{ fontSize: 11, color: "#666" }}>· 8 members</span>
+            <span style={{ color: "#FFE500", fontWeight: 800, fontSize: 16 }}>#</span>
+            <span style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>dev</span>
+            <span style={{ fontSize: 12, color: "#666" }}>· 8 members</span>
           </div>
         </div>
 
         {/* Message area */}
-        <div style={{ minHeight: 280, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ minHeight: 280, padding: "24px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
           <div
             style={{
               display: "flex",
-              gap: 12,
+              gap: 14,
               opacity: incomingVisible ? 1 : 0,
               transform: incomingVisible ? "translateY(0)" : "translateY(12px)",
               transition: "opacity 0.4s, transform 0.4s",
@@ -247,8 +246,8 @@ function SlackMock({
           >
             <div
               style={{
-                height: 36,
-                width: 36,
+                height: 40,
+                width: 40,
                 flexShrink: 0,
                 background: "#FFE500",
                 border: "2px solid #fff",
@@ -256,7 +255,7 @@ function SlackMock({
                 alignItems: "center",
                 justifyContent: "center",
                 fontWeight: 800,
-                fontSize: 13,
+                fontSize: 14,
                 color: "#000",
               }}
             >
@@ -264,27 +263,27 @@ function SlackMock({
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>Maya Chen</span>
-                <span style={{ fontSize: 11, color: "#555" }}>10:42 AM</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: "#fff" }}>Maya Chen</span>
+                <span style={{ fontSize: 12, color: "#555" }}>10:42 AM</span>
               </div>
               <div
                 style={{
                   marginTop: 6,
                   display: "inline-block",
                   maxWidth: "100%",
-                  padding: "10px 14px",
+                  padding: "12px 16px",
                   background: "#1a1a1a",
                   border: "2px solid #333",
                   boxShadow: "3px 3px 0 #333",
                 }}
               >
-                <p style={{ fontSize: 13, lineHeight: 1.6, color: "#eee" }}>{INCOMING}</p>
+                <p style={{ fontSize: 15, lineHeight: 1.6, color: "#eee" }}>{INCOMING}</p>
               </div>
             </div>
           </div>
 
           {isTyping && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 48, fontSize: 12, color: "#666" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 54, fontSize: 13, color: "#666" }}>
               <span style={{ display: "flex", gap: 4 }}>
                 {[0, 150, 300].map((delay) => (
                   <span
@@ -312,15 +311,15 @@ function SlackMock({
         </div>
 
         {/* Composer */}
-        <div style={{ padding: "0 20px 20px" }}>
+        <div style={{ padding: "0 24px 24px" }}>
           <div
             style={{
               background: "#0c0c0c",
               border: "2px solid #fff",
-              padding: "12px 16px",
+              padding: "14px 18px",
             }}
           >
-            <p style={{ minHeight: "1.5rem", fontSize: 13, lineHeight: 1.6, color: "#fff", fontFamily: "inherit" }}>
+            <p style={{ minHeight: "1.5rem", fontSize: 15, lineHeight: 1.6, color: "#fff", fontFamily: "inherit" }}>
               {draft || <span style={{ color: "#444" }}>Message #dev</span>}
               {caret && (
                 <span

@@ -38,7 +38,7 @@ Propagate has five major components.
 | Component | Responsibility |
 | --- | --- |
 | Go CLI | Command routing, local identity management, Git/config discovery, env file parsing, encryption/decryption, cloud API calls, non-interactive output |
-| Bubble Tea TUI | Interactive setup, env import review, env push confirmation, config approval decisions |
+| Bubble Tea TUI | Interactive setup, env import review, env push confirmation, config approval decisions, config variable metadata editing |
 | Go Cloud Run API | HTTPS API, request signature verification, authorization checks, transaction orchestration, audit recording |
 | Supabase Postgres | Persistent team metadata, config revisions, encrypted secret records, encrypted key envelopes, audit events, pull/update history |
 | Terraform and migrations | Provision Google Cloud/Supabase infrastructure and apply versioned database changes |
@@ -53,8 +53,8 @@ The CLI should be organized around small packages with clear boundaries.
 
 | Area | Responsibility |
 | --- | --- |
-| Command layer | Defines `init`, `team`, `config`, and `env` command groups; handles flags, output mode, and exit codes |
-| TUI layer | Bubble Tea models for setup, env import, env push, and config approval flows |
+| Command layer | Defines `init`, `team`, `scope`, `config`, and `env` command groups; handles flags, output mode, output style, and exit codes |
+| TUI layer | Bubble Tea models for setup, env import, env push, config approval, and config variable edit flows |
 | Identity layer | Creates, loads, validates, and stores local signing/encryption keys and handle metadata |
 | Config layer | Reads, validates, normalizes, and writes `propagate.yaml` |
 | Git layer | Detects worktree root, checks tracked/ignored files, computes config diff hints |
@@ -77,6 +77,38 @@ Recommended Go libraries:
 | Agent guidance rendering | A small internal template and diff package; avoid shelling out to agent-specific tooling for MVP |
 
 The CLI should expose `--json` for status-style commands and `--dry-run` for commands that would write cloud or local state. The initial implementation can keep JSON output limited to stable status summaries, but command internals should avoid formatting-dependent logic so machine output can grow later.
+
+### 4.1 Human Output Rendering
+
+The command layer should use a shared renderer for non-JSON terminal output. `propagate init` is the style baseline, and every command result renderer should use the same primitives rather than hand-formatting headings independently.
+
+The shared output renderer should provide:
+
+- A command title helper that prints a bold title and appends `(dry run)` when relevant.
+- Semantic status helpers for success, note, and warning lines:
+  - success: green `✓`
+  - note: cyan `•`
+  - warning: yellow `!`
+- Section helpers for `Warnings:`, `Next steps:`, and repeated list sections.
+- A single `--no-color` switch that removes ANSI color without changing symbols, wording, or layout.
+- A guarantee that JSON output never includes ANSI color or decorative terminal formatting.
+
+Human result renderers should use this shared style for the command groups:
+
+- `propagate init`
+- `propagate team join`
+- `propagate team status`
+- `propagate scope create`
+- `propagate config status`
+- `propagate config pull`
+- `propagate config push`
+- `propagate config edit`
+- `propagate env pull`
+- `propagate env push`
+- `propagate env set`
+- `propagate env status`
+
+Shared error rendering should use the same warning marker and `Next steps:` section style. Help and version output may stay plain.
 
 ## 5. Local Files And Directories
 
@@ -626,6 +658,10 @@ Security rules:
 
 `propagate.yaml` is committed to Git and contains team metadata plus safe variable declarations. Sensitive values must never appear directly. Non-sensitive literals require an explicit `sensitivity: non_sensitive` declaration.
 
+Config edits to variable declarations are local metadata changes. The CLI may change a declaration's sensitivity, move it between scopes, add an env file mapping needed by that move, or remove the declaration, but it must not read env file values, decrypt cloud values, or mutate encrypted secret versions during config edit.
+
+Scope creation is also a local metadata change. `propagate scope create` may add an empty scope with optional env file mappings and default role access, but it must not read local env values, generate encrypted secret versions, decrypt cloud values, or publish the scope directly. Publication happens through `propagate config push`.
+
 Logical sections:
 
 | Section | Contents |
@@ -643,6 +679,8 @@ Config validation should check:
 - Team ID and cloud revision format.
 - Sensitive variables use keyed digest declarations with an algorithm prefix.
 - Non-sensitive literals are explicitly marked and short; long non-sensitive values use previews.
+- Sensitive declarations do not retain literal or preview metadata.
+- Each variable declaration references an env file path listed by its containing scope.
 - No raw plaintext hashes, private keys, access tokens, or unmarked value-like literals in scope, variable, pending, member, history, or metadata sections.
 - Valid public keys and public key SHA matches.
 - Scope names are valid and unique.
@@ -686,13 +724,14 @@ Failure handling:
 
 ### 13.2 Developer Join
 
-1. Developer runs `propagate init` to create or load identity.
-2. Developer runs `propagate team join`.
-3. CLI reads `propagate.yaml`.
-4. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested role, requested scopes, and timestamp.
-5. CLI writes `propagate.yaml`.
-6. CLI explains that no secret access has been granted.
-7. Developer commits the config diff and opens a pull request.
+1. Developer can run `propagate init` to create or load identity, then run `propagate team join`.
+2. For an already configured repository, developer can instead run `propagate team join --init --handle bob@example.com --scope dev=read` to combine existing-project init and the join request.
+3. When `--init` is present, CLI runs the existing-project init path first: create or load identity, verify `propagate.yaml` exists, and offer or apply agent guidance. It must not create a new project config in the join path.
+4. CLI reads `propagate.yaml`.
+5. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested role, requested scopes, and timestamp.
+6. CLI writes `propagate.yaml`.
+7. CLI explains that no secret access has been granted.
+8. Developer commits the config diff and opens a pull request.
 
 The cloud does not need to know about the request until an admin pushes the approved config. This keeps the access request reviewable in Git.
 
@@ -708,10 +747,12 @@ The cloud does not need to know about the request until an admin pushes the appr
 8. Admin approves, declines, or skips each item.
 9. For approvals, CLI prepares updated config metadata.
 10. For approved scope access, CLI decrypts the relevant scope key and encrypts a new envelope for the target member.
-11. CLI sends a signed config push with expected cloud revision, decisions, updated config snapshot, and new envelopes.
-12. Go API validates admin permission and applies the transaction through stored functions.
-13. CLI updates `propagate.yaml` to reflect approved and declined decisions while leaving skipped items pending.
-14. CLI prints a decision summary and whether the config file changed.
+11. If the target config contains scopes that do not exist in the current cloud config, CLI generates a fresh random scope key for each new scope.
+12. For each new scope, CLI encrypts the new scope key for every active member who has read access under the target config's default role access.
+13. CLI sends a signed config push with expected cloud revision, decisions, updated config snapshot, and new envelopes.
+14. Go API validates admin permission and applies the transaction through stored functions.
+15. CLI updates `propagate.yaml` to reflect approved and declined decisions while leaving skipped items pending.
+16. CLI prints a decision summary and whether the config file changed.
 
 Skipped items remain local and reviewable. Declined items are removed from pending and recorded in audit events.
 
@@ -729,7 +770,64 @@ Skipped items remain local and reviewable. Declined items are removed from pendi
 
 If local unpushed changes exist, the CLI should warn before overwriting and offer a dry-run summary. The default should be conservative: do not overwrite local pending requests without explicit confirmation.
 
-### 13.5 Env Pull
+### 13.5 Scope Create
+
+`propagate scope create` creates an empty local scope declaration in `propagate.yaml`.
+
+Flow:
+
+1. User runs `propagate scope create NAME`, optionally with one or more `--env-file PATH` mappings.
+2. CLI verifies the current directory is inside a Git worktree.
+3. CLI loads `propagate.yaml` and validates the requested scope name.
+4. CLI rejects duplicate scope names.
+5. CLI validates optional env file mappings as repository-relative paths inside the worktree.
+6. CLI adds a new scope with empty variables, optional env file mappings, and default role access.
+7. CLI validates the edited config.
+8. With `--dry-run`, CLI prints the safe summary and does not write.
+9. Without `--dry-run`, CLI writes `propagate.yaml` atomically.
+10. CLI does not prompt for source scopes and does not copy env file mappings or declaration metadata from existing scopes.
+11. CLI recommends `propagate config status`, `propagate config edit`, `propagate config push`, and existing env push commands for setting metadata and seeding the new scope.
+
+Safety rules:
+
+- No API call is required.
+- No local env file values are read.
+- No encrypted cloud values are pulled or decrypted.
+- No encrypted secret records are created, updated, or deleted.
+- No plaintext scope key is generated during `scope create`; scope keys are generated only when a new scope is published with `config push`.
+- No env file mappings or variable declarations are copied from other scopes during `scope create`.
+
+### 13.6 Config Edit
+
+`propagate config edit` opens an interactive local editor for variable declaration metadata.
+
+Flow:
+
+1. User runs `propagate config edit`.
+2. CLI loads `propagate.yaml` and validates it before editing.
+3. TUI lists declarations by scope, env file path, variable name, and sensitivity.
+4. User chooses metadata edits:
+   - Toggle sensitivity.
+   - Move a declaration to another existing scope.
+   - Remove a declaration from config metadata.
+5. If a move targets a scope that does not list the declaration's env file path, CLI adds that env file mapping to the target scope.
+6. CLI validates the edited config.
+7. With `--dry-run`, CLI prints the safe summary and does not write.
+8. Without `--dry-run`, CLI writes `propagate.yaml` atomically.
+9. CLI recommends `propagate config status` and `propagate config push` for review and publication.
+
+Safety rules:
+
+- No API call is required.
+- No local env file values are read.
+- No encrypted cloud values are pulled or decrypted.
+- No encrypted secret records are created, updated, or deleted.
+- Moving a declaration changes config metadata only; it does not re-encrypt the underlying value.
+- Removing a declaration removes metadata only. Secret removals continue through env push or single-value env workflows.
+- Switching from `non_sensitive` to `sensitive` must clear literal and preview fields.
+- Non-interactive mode should fail instead of waiting for TUI input.
+
+### 13.7 Env Pull
 
 1. User runs `propagate env pull`, optionally selecting a scope.
 2. CLI loads identity and config.
@@ -745,7 +843,7 @@ If local unpushed changes exist, the CLI should warn before overwriting and offe
 
 For `prod`, the CLI should require an additional confirmation before writing to a local env file unless the user has configured a trusted non-interactive mode.
 
-### 13.6 Env Push
+### 13.8 Env Push
 
 1. User runs `propagate env push`, optionally selecting a scope.
 2. CLI loads identity and config.
@@ -765,25 +863,29 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 
 If the user lacks write access, the CLI should refuse before upload and explain how to request access.
 
-### 13.7 Env Set
+### 13.9 Env Set
 
-1. User runs `propagate env set NAME --scope dev`.
-2. CLI loads identity and config.
-3. CLI prompts for the value using a secure no-echo prompt.
-4. CLI requests current encrypted cloud values and the user's scope envelope.
-5. CLI decrypts the scope key locally.
-6. CLI determines whether the variable is added or changed.
-7. CLI verifies write access before upload.
-8. CLI encrypts the new value locally.
-9. CLI updates the variable declaration in the target scope.
-10. CLI sends one encrypted upsert, expected current version metadata, and the updated config snapshot through the env push API.
-11. Go API validates write permission and version preconditions through stored functions.
-12. Database transaction creates one immutable secret version, updates the current pointer, stores the new config revision, and records audit events.
-13. CLI updates local `propagate.yaml` with the accepted revision and prints a safe summary with scope, variable name, add/change status, and operation ID.
+1. User runs `propagate env set NAME --scope dev` or omits `--scope` for interactive selection.
+2. CLI validates the variable name. `--value-stdin` is validated before config loading so missing piped input fails early.
+3. CLI loads identity and config.
+4. CLI resolves the target scope: explicit `--scope`, the only configured scope, or an interactive prompt when multiple scopes exist.
+5. In non-interactive mode, CLI requires `--scope` when multiple scopes exist.
+6. CLI asks for production confirmation before reading a value when the target scope is `prod`.
+7. CLI prompts for the value using a secure no-echo prompt unless `--value-stdin` was used.
+8. CLI requests current encrypted cloud values and the user's scope envelope.
+9. CLI decrypts the scope key locally.
+10. CLI determines the target env file mapping and whether the variable is added or changed.
+11. CLI verifies write access before upload.
+12. CLI encrypts the new value locally.
+13. CLI updates the variable declaration in the target scope.
+14. CLI sends one encrypted upsert, expected current version metadata, and the updated config snapshot through the env push API.
+15. Go API validates write permission and version preconditions through stored functions.
+16. Database transaction creates one immutable secret version, updates the current pointer, stores the new config revision, and records audit events.
+17. CLI updates local `propagate.yaml` with the accepted revision and prints a safe summary with scope, variable name, add/change status, and operation ID.
 
 The plaintext value must never be accepted as a positional command argument, shown in output, written as a sensitive literal in `propagate.yaml`, or logged. `env set` should not update local env files unless a future explicit flag requests it.
 
-### 13.8 Env Status
+### 13.10 Env Status
 
 `propagate env status` should fetch the latest cloud config snapshot and the encrypted env status bundle. The CLI decrypts the scope key locally, hashes local env file values with the declaration algorithm, and compares those local digests to the latest cloud declarations.
 
@@ -795,7 +897,7 @@ The command should report:
 - Last updated metadata from cloud secret versions.
 - Next steps: `propagate config pull` when YAML is stale, and `propagate env pull` when values differ or are missing.
 
-### 13.9 Team Status
+### 13.11 Team Status
 
 `propagate team status` should combine local config and cloud audit summaries:
 
@@ -871,8 +973,11 @@ Common TUI requirements:
 - No plaintext env value display.
 - Confirmation screens for cloud writes and local env writes.
 - Final summary that can be copied into PR descriptions or team messages.
+- Interactive command screens that print plain terminal headings, such as the config edit metadata editor, should reuse the shared human output style for titles and section headings where practical.
 
 TUI models should be deterministic state machines. They should receive domain data, produce user decisions, and avoid direct database or filesystem writes. The command layer performs side effects after the TUI returns a decision.
+
+The Config Edit TUI should receive parsed config declarations and return metadata edit decisions only. It should display variable name, scope, env file path, sensitivity, and pending env file mapping additions. It must not display, request, infer, or persist env values.
 
 ## 17. AI Agent Integration
 
@@ -949,6 +1054,7 @@ Command contract requirements:
 | Exit codes | Distinguish success, validation failure, permission denied, cloud unavailable, conflict, user cancellation, and internal error |
 | Non-interactive mode | Commands should fail with a clear error instead of waiting forever when confirmation is required and no TTY is available |
 | Dry runs | Write-capable commands should support dry-run summaries without changing local files or cloud state |
+| Human output | Non-JSON output should use the shared Propagate style: bold command title, semantic status marker, consistent list sections, and `--no-color` support |
 | Output safety | stdout, stderr, JSON, logs, and panic paths must never contain plaintext env values |
 | Operation IDs | Mutating commands should return operation IDs in JSON so agents can report and retry safely |
 | Next steps | Errors should include safe remediation, such as requesting access or asking an admin to approve a pending join |
@@ -1017,6 +1123,8 @@ Rules:
 - Do not write sensitive env values to `propagate.yaml`.
 - Do not write raw hashes of plaintext values. Use scope-keyed, algorithm-prefixed digests such as `hmac-sha-256:v1:...`.
 - Do not write direct literals unless the variable is explicitly marked `non_sensitive` and the value fits on one short line; truncate longer non-sensitive values as previews.
+- Do not use `config edit` to infer or populate literals from local env files. It edits declaration metadata only.
+- Do not use `scope create` to read, infer, validate, or copy env values. It creates scope metadata only; use `config edit` to set env file mappings or move declaration metadata.
 - Do not accept env values as positional CLI arguments; `env set` must use secure no-echo prompting or an explicit non-echo input channel.
 - Do not write env values to generated agent instructions, skills, prompts, tool logs, or machine-readable output.
 - Do not include private key material, access tokens, cloud credentials, prompt text, or conversation text in generated agent guidance or audit metadata.
@@ -1107,11 +1215,13 @@ Guardrails:
 | --- | --- |
 | No Git repository | `init` refuses project setup and explains that MVP requires Git |
 | Existing invalid `propagate.yaml` | Command refuses to continue until repaired or backed up |
+| `team join --init` without `propagate.yaml` | Command refuses to create a new project and tells the user to get the repository config first |
 | Corrupted local identity | CLI refuses to use it and gives recovery options |
 | Lost private key | User must create a new identity and request access again |
 | Duplicate handle | Allowed, but UI highlights public key SHA because handle is not identity |
 | Duplicate public key in pending joins | CLI warns and avoids adding duplicate request |
 | Pending join for existing member | CLI rejects the pending request locally |
+| Duplicate scope name | CLI rejects scope creation locally and leaves `propagate.yaml` unchanged |
 | Cloud unavailable | Local-only commands can proceed; cloud writes fail with retry guidance |
 | Config revision mismatch | Push rejected; user must pull and resolve |
 | Secret version conflict | Env push rejected for conflicting variables; user must pull latest |
@@ -1181,7 +1291,7 @@ Recommended coverage:
 | Identity | Key creation, permission checks, corrupted files, public key SHA stability |
 | Crypto | Round-trip encryption, wrong recipient failure, associated data mismatch failure, nonce uniqueness |
 | Env parsing | Quoting, comments, empty values, duplicate names, preserve unrelated values |
-| TUI decisions | Approval, decline, skip, cancel, selection state, masked values |
+| TUI decisions | Approval, decline, skip, config edit metadata changes, cancel, selection state, masked values |
 | API authorization | Read/write/admin permissions, revoked members, replay rejection, revision preconditions |
 | Supabase transactions | Config push atomicity, env push conflicts, env set partial updates, idempotent retries |
 | Agent guidance | Target detection, managed block replacement, idempotent reruns, malformed marker handling, no env value leakage |
@@ -1259,9 +1369,11 @@ Operational recommendations:
 
 - `propagate init`.
 - `propagate team join`.
+- `propagate scope create`.
 - `propagate config status`.
 - `propagate config pull`.
 - `propagate config push`.
+- `propagate config edit`.
 - `propagate env pull`.
 - `propagate env push`.
 - `propagate env set`.
@@ -1273,6 +1385,7 @@ Operational recommendations:
 - Env import TUI.
 - Env push TUI.
 - Config push TUI.
+- Config edit TUI.
 - Agent guidance target selection and diff preview.
 - Prod guardrails.
 - Clear summaries and error messages.

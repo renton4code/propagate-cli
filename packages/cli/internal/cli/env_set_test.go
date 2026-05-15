@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,7 @@ import (
 	"propagate/cli/internal/secretcrypto"
 )
 
-func TestEnvSetPromptsEncryptsAndUploadsSingleValue(t *testing.T) {
+func TestEnvSetValueStdinEncryptsAndUploadsSingleValue(t *testing.T) {
 	repo := initGitRepo(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -132,6 +133,8 @@ func TestEnvSetPromptsEncryptsAndUploadsSingleValue(t *testing.T) {
 		"env", "set", "API_TOKEN",
 		"--api-url", "http://propagate.test",
 		"--yes",
+		"--value-stdin",
+		"--non-interactive",
 	}, Streams{
 		In:      strings.NewReader(newSecret + "\n"),
 		Out:     &stdout,
@@ -151,6 +154,9 @@ func TestEnvSetPromptsEncryptsAndUploadsSingleValue(t *testing.T) {
 		if strings.Contains(stdout.String(), forbidden) || strings.Contains(stderr.String(), forbidden) {
 			t.Fatalf("env set output leaked plaintext %q\nstdout:\n%s\nstderr:\n%s", forbidden, stdout.String(), stderr.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "Value for API_TOKEN") {
+		t.Fatalf("value stdin mode should not render a value prompt:\n%s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Change: changed") || !strings.Contains(stdout.String(), "New versions uploaded: 1") {
 		t.Fatalf("output missing env set summary:\n%s", stdout.String())
@@ -203,7 +209,91 @@ func TestEnvSetNonInteractiveRequiresPrompt(t *testing.T) {
 	if code != ExitConfirmationRequired {
 		t.Fatalf("env set exit = %d, want %d; stderr:\n%s", code, ExitConfirmationRequired, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "requires an interactive value prompt") {
-		t.Fatalf("stderr missing prompt requirement:\n%s", stderr.String())
+	if !strings.Contains(stderr.String(), "requires --value-stdin") {
+		t.Fatalf("stderr missing stdin value guidance:\n%s", stderr.String())
+	}
+}
+
+func TestEnvSetValueStdinRequiresInput(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"env", "set", "API_TOKEN",
+		"--dry-run",
+		"--value-stdin",
+		"--non-interactive",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitValidationError {
+		t.Fatalf("env set exit = %d, want %d; stderr:\n%s", code, ExitValidationError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--value-stdin requires input") {
+		t.Fatalf("stderr missing missing-input guidance:\n%s", stderr.String())
+	}
+}
+
+func TestEnvSetPromptsForScopeWhenMultipleScopes(t *testing.T) {
+	input := strings.NewReader("2\n")
+	var out bytes.Buffer
+	project := config.ParsedProject{Scopes: []config.ScopeSummary{
+		{Name: "dev", EnvFiles: []string{".env"}},
+		{Name: "staging", EnvFiles: []string{".env.staging"}},
+	}}
+
+	scopeName, scope, err := resolveEnvSetScope(bufio.NewReader(input), input, &out, envSetOptions{}, project)
+	if err != nil {
+		t.Fatalf("resolve scope: %v", err)
+	}
+	if scopeName != "staging" || scope == nil || scope.Name != "staging" {
+		t.Fatalf("scope = %q %+v, want staging", scopeName, scope)
+	}
+	if !strings.Contains(out.String(), "Scopes:") || !strings.Contains(out.String(), "Choose scope number or name") {
+		t.Fatalf("output missing scope prompt:\n%s", out.String())
+	}
+}
+
+func TestEnvSetUsesOnlyScopeWhenScopeOmitted(t *testing.T) {
+	project := config.ParsedProject{Scopes: []config.ScopeSummary{
+		{Name: "staging", EnvFiles: []string{".env.staging"}},
+	}}
+
+	scopeName, scope, err := resolveEnvSetScope(bufio.NewReader(strings.NewReader("")), strings.NewReader(""), io.Discard, envSetOptions{}, project)
+	if err != nil {
+		t.Fatalf("resolve scope: %v", err)
+	}
+	if scopeName != "staging" || scope == nil || scope.Name != "staging" {
+		t.Fatalf("scope = %q %+v, want staging", scopeName, scope)
+	}
+}
+
+func TestEnvSetNonInteractiveRequiresScopeWhenMultipleScopes(t *testing.T) {
+	project := config.ParsedProject{Scopes: []config.ScopeSummary{
+		{Name: "dev", EnvFiles: []string{".env"}},
+		{Name: "staging", EnvFiles: []string{".env.staging"}},
+	}}
+
+	_, _, err := resolveEnvSetScope(
+		bufio.NewReader(strings.NewReader("")),
+		strings.NewReader(""),
+		io.Discard,
+		envSetOptions{globalOptions: globalOptions{NonInteractive: true}},
+		project,
+	)
+	if err == nil {
+		t.Fatalf("resolve scope succeeded, want error")
+	}
+	cmdErr, ok := err.(*CommandError)
+	if !ok {
+		t.Fatalf("error = %T %v, want CommandError", err, err)
+	}
+	if cmdErr.Code != ExitConfirmationRequired || !strings.Contains(cmdErr.Error(), "--scope") {
+		t.Fatalf("error = %+v, want --scope confirmation required", cmdErr)
 	}
 }
