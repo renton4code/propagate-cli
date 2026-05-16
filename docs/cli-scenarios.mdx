@@ -138,6 +138,26 @@ propagate env pull --scope dev --yes --non-interactive
 
 Do not copy values from local env files into chat, docs, tests, fixtures, or commits.
 
+## Run With Injected Env Values
+
+Use process injection when the target command needs cloud env values but local env files should stay unchanged:
+
+```bash
+propagate run --scope dev -- npm run dev
+```
+
+`propagate run` decrypts values locally and passes them only to the child process environment. It does not write `.env` files, and injected cloud values override inherited environment variables with the same names for that child process.
+
+Do not use `propagate run` to inspect or print secrets. Child process output is not sanitized by Propagate, so avoid commands such as `env`, `printenv`, or debugging tools that dump environment variables.
+
+For prod process injection, get explicit human approval first:
+
+```bash
+propagate run --scope prod --yes -- ./bin/maintenance-task
+```
+
+If `propagate run` reports duplicate variable names across env file mappings, use `propagate env pull` for file-based workflows or resolve the duplicate metadata before retrying.
+
 ## Push Local Env File Changes
 
 Preview the encrypted upload plan:

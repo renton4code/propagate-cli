@@ -28,7 +28,6 @@ MVP implementation stack:
 ## 3. Non-Goals For MVP
 
 - CI/CD integration.
-- `propagate run` or process-level secret injection.
 - Production runtime agent.
 - Dedicated AI agent identities or autonomous secret access separate from a human user's local Propagate identity.
 - Web dashboard.
@@ -500,7 +499,52 @@ If the user lacks read access, the CLI should say:
 - That no values were written.
 - How to request access.
 
-### 6.9 `propagate env push`
+### 6.9 `propagate run`
+
+Injects decrypted cloud env values into a child process without writing local env files.
+
+#### Usage
+
+```bash
+propagate run --scope dev -- npm run dev
+propagate run --scope staging -- go test ./...
+propagate run --scope prod --yes -- ./bin/maintenance-task
+```
+
+Default scope is `dev`. The `--` separator is required so Propagate flags are clearly separated from child command flags.
+
+#### Behavior
+
+1. Read `propagate.yaml`.
+2. Determine env file mappings and variable metadata for the selected scope.
+3. Check whether the user has read access to the scope.
+4. Fetch the encrypted pull bundle from the cloud.
+5. Decrypt the scope key and env values locally.
+6. Flatten decrypted values into process environment entries.
+7. Refuse to start the child process if the same variable name appears in multiple env files for the selected scope.
+8. Start the child command with inherited environment variables plus injected values, where injected values take precedence.
+9. Preserve the caller's stdin, stdout, stderr, and working directory for the child process.
+10. Record a safe process-injection audit event through the pull-event path with client kind `cli_run`.
+11. Return the child process exit code.
+
+#### Safety Requirements
+
+- Must not write local env files.
+- Must not print plaintext values in Propagate-owned output, JSON, warnings, or errors.
+- Must not sanitize or suppress child process output; the child process can print values if the command does so.
+- Must fail before starting the child process on duplicate variable names across env file mappings.
+- Must require `--yes` for non-interactive `prod` scope injection, and should prompt before interactive `prod` injection.
+
+#### Access Errors
+
+If the user lacks read access, the CLI should say:
+
+- Which scope was requested.
+- Which identity is being used.
+- That no process was started.
+- How to request access.
+
+### 6.10 `propagate env push`
 
 Pushes local env file changes to the encrypted cloud store.
 
@@ -540,7 +584,7 @@ If the user lacks write access, the CLI should:
 - Refuse the push before upload.
 - Suggest requesting a role or scope change.
 
-### 6.10 `propagate env set`
+### 6.11 `propagate env set`
 
 Sets or updates one environment variable value in the encrypted cloud store.
 
@@ -593,7 +637,7 @@ If the user lacks write access, the CLI should:
 - Refuse before upload.
 - Suggest requesting a role or scope change.
 
-### 6.11 `propagate env status`
+### 6.12 `propagate env status`
 
 Shows masked values currently stored in the cloud and compares local env files against the latest cloud `propagate.yaml` declarations.
 
@@ -621,7 +665,7 @@ STRIPE_KEY=s***********x
 Last updated: 2026-04-30 10:24 by alice@example.com
 ```
 
-### 6.12 `propagate team status`
+### 6.13 `propagate team status`
 
 Shows team membership, pending requests, access changes, and pull activity.
 
@@ -756,7 +800,7 @@ The generated guidance should tell agents:
 - Prefer `propagate config status`, `propagate team status`, and `propagate env status` for discovery.
 - Prefer `--json` for machine-readable status output.
 - Prefer `--dry-run` before any command that writes local files or cloud state.
-- Require human confirmation before running `propagate config edit`, `propagate env pull`, `propagate env push`, `propagate env set`, or `propagate config push`.
+- Require human confirmation before running `propagate config edit`, `propagate env pull`, `propagate env push`, `propagate env set`, `propagate config push`, or `propagate run` with `--scope prod`.
 - Report permission errors and pending join requirements clearly instead of attempting workarounds.
 
 Agent guidance is not an access-control system. Agents operate with the user's local filesystem and identity. Propagate must still enforce permissions in the CLI and cloud API.
@@ -1085,6 +1129,7 @@ MVP success metrics:
 - `propagate config status`.
 - `propagate config edit`.
 - `propagate env pull`.
+- `propagate run -- command`.
 - `propagate env push`.
 - `propagate env set`.
 - `propagate env status`.
@@ -1099,7 +1144,6 @@ MVP success metrics:
 
 ### Later
 
-- `propagate run -- command`.
 - CI identities.
 - GitHub Actions OIDC.
 - Runtime production agents.
@@ -1119,7 +1163,7 @@ MVP success metrics:
 - Use `propagate.yaml` instead of `propagate.yalm`. The latter appears to be a typo and will create unnecessary friction.
 - Prefer the term "scope" in the CLI but explain it as "environment" in user-facing setup prompts.
 - Make `dev` the default scope, but require an extra confirmation before importing or writing `prod`.
-- Treat `propagate env pull` as the compatibility path for MVP, but design the data model so `propagate run` can be added cleanly later.
+- Treat `propagate env pull` as the compatibility path for file-based workflows, and use `propagate run` as the no-write process injection path.
 - Add automatic `.gitignore` checks for managed env files.
 - Treat every env value as confidential for storage purposes, even when a user describes it as public.
 - Add a `--dry-run` option to `env push`, `env set`, `env pull`, `config push`, `config edit`, and `scope create`.

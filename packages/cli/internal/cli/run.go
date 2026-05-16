@@ -52,6 +52,8 @@ func Run(args []string, streams Streams) int {
 	switch rest[0] {
 	case "init":
 		return runInitCommand(rest[1:], global, streams)
+	case "run":
+		return runProcessCommand(rest[1:], global, streams)
 	case "team":
 		return runTeamCommand(rest[1:], global, streams)
 	case "scope":
@@ -113,6 +115,7 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  propagate init [flags]")
+	fmt.Fprintln(w, "  propagate run [flags] -- COMMAND [args...]")
 	fmt.Fprintln(w, "  propagate team join [flags]")
 	fmt.Fprintln(w, "  propagate team status [flags]")
 	fmt.Fprintln(w, "  propagate scope create NAME [flags]")
@@ -133,6 +136,7 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  init      create or load local identity and initialize project metadata")
+	fmt.Fprintln(w, "  run       inject decrypted env values into a child process")
 	fmt.Fprintln(w, "  team      team membership commands")
 	fmt.Fprintln(w, "  scope     scope metadata commands")
 	fmt.Fprintln(w, "  config    config synchronization commands")

@@ -118,6 +118,30 @@ func TestSequentialCLIAPIWithSupabaseDB(t *testing.T) {
 		requireNoVariable(t, envStatus.Variables, "REMOVE_ME")
 	})
 
+	t.Run("process injection passes cloud values to child without writing env file", func(t *testing.T) {
+		writeFile(t, filepath.Join(repo, ".env"), "LOCAL_ONLY=yes\n", 0o600)
+		t.Setenv("PROPAGATE_EXPECT_DATABASE_URL", databaseURL)
+		t.Setenv("PROPAGATE_EXPECT_API_TOKEN", pushedAPIToken)
+		t.Setenv("PROPAGATE_EXPECT_ROTATED_TOKEN", rotatedToken)
+		t.Setenv("PROPAGATE_EXPECT_PUSHED_ONLY", pushedOnly)
+		script := strings.Join([]string{
+			`test "$DATABASE_URL" = "$PROPAGATE_EXPECT_DATABASE_URL" || exit 21`,
+			`test "$API_TOKEN" = "$PROPAGATE_EXPECT_API_TOKEN" || exit 22`,
+			`test "$ROTATED_TOKEN" = "$PROPAGATE_EXPECT_ROTATED_TOKEN" || exit 23`,
+			`test "$PUSHED_ONLY" = "$PROPAGATE_EXPECT_PUSHED_ONLY" || exit 24`,
+			`printf injected-ok`,
+		}, "\n")
+
+		result := h.run(repo, admin, "", "run", "--scope", "dev", "--", "sh", "-c", script)
+		requireNoPlaintext(t, result.Combined(), plaintextValues...)
+		if strings.TrimSpace(result.Stdout) != "injected-ok" {
+			t.Fatalf("unexpected child stdout:\n%s\nstderr:\n%s", result.Stdout, result.Stderr)
+		}
+		if got := readFile(t, filepath.Join(repo, ".env")); got != "LOCAL_ONLY=yes\n" {
+			t.Fatalf("process injection changed .env:\n%s", got)
+		}
+	})
+
 	t.Run("env pull preserves unrelated local variables", func(t *testing.T) {
 		writeFile(t, filepath.Join(repo, ".env"), "LOCAL_ONLY=yes\n", 0o600)
 		result := h.run(repo, admin, "", "env", "pull", "--json", "--yes", "--non-interactive")

@@ -15,6 +15,9 @@ func TestRenderBlockIncludesCommandGuidance(t *testing.T) {
 		"--approve-join",
 		"--decline-join",
 		"--skip-join",
+		"propagate run --scope dev -- COMMAND [args...]",
+		"propagate run --scope prod",
+		"Child process output from `propagate run` is not sanitized",
 		"--value-stdin --yes --non-interactive",
 	} {
 		if !strings.Contains(block, want) {

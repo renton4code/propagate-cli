@@ -544,7 +544,54 @@ Failure behavior:
 - For `prod`, require extra confirmation before local write.
 - If pull event recording fails after successful local write, warn but do not roll back local files.
 
-### 6.7 `propagate env push`
+### 6.7 `propagate run`
+
+Purpose: fetch encrypted values, decrypt locally, and inject them into a child process without writing env files.
+
+Usage:
+
+| Command Shape | Behavior |
+| --- | --- |
+| `propagate run --scope dev -- npm run dev` | Runs `npm run dev` with decrypted `dev` values in the child environment |
+
+Inputs:
+
+| Input | Required | Notes |
+| --- | --- | --- |
+| `--scope` | Optional | Defaults to `dev` |
+| `--` | Required | Separates Propagate flags from child command and child flags |
+| Child command | Required | Executed directly, not through a shell unless the user explicitly runs one |
+| `--yes` | Optional | Required for non-interactive `prod` injection |
+
+Local reads:
+
+- Local identity
+- `propagate.yaml`
+
+API calls:
+
+- `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle`
+- `POST /v1/teams/{team_id}/events/pull` with client kind `cli_run`
+
+Local writes:
+
+- None.
+
+Execution behavior:
+
+- Decrypt values locally using the same pull-bundle path as `env pull`.
+- Append decrypted `NAME=value` entries after the inherited environment so cloud values override existing variables for the child process.
+- Preserve stdin, stdout, stderr, and working directory.
+- Return the child process exit code.
+
+Failure behavior:
+
+- If read access denied, start no process.
+- If scope key envelope cannot decrypt, start no process.
+- If the same variable name appears in multiple env file mappings for the scope, start no process.
+- Propagate-owned output must not include plaintext values. Child output is not sanitized.
+
+### 6.8 `propagate env push`
 
 Purpose: read local env files, compare with cloud, encrypt approved changes, and upload.
 
@@ -591,7 +638,7 @@ Failure behavior:
 - If local env file has duplicate variables, require confirmation before managing.
 - If no secret changes are approved but variable declarations changed, push the metadata snapshot and update `propagate.yaml`.
 
-### 6.8 `propagate env set`
+### 6.9 `propagate env set`
 
 Purpose: securely set or update one variable in the encrypted cloud store without reading a whole env file.
 
@@ -647,7 +694,7 @@ Failure behavior:
 - For `prod`, require extra confirmation before prompting/uploading.
 - Do not update local env files unless a future explicit flag requests it.
 
-### 6.9 `propagate env status`
+### 6.10 `propagate env status`
 
 Purpose: show cloud env state for a scope without writing files, and compare local env values against the latest cloud YAML declarations.
 
@@ -690,7 +737,7 @@ Failure behavior:
 - If read access denied, show identity and requested scope, then write nothing.
 - If decrypt fails, return a crypto/access error and do not show partial plaintext.
 
-### 6.10 `propagate team status`
+### 6.11 `propagate team status`
 
 Purpose: show team membership, pending requests, access changes, and pull activity.
 
@@ -729,7 +776,7 @@ Failure behavior:
 - If cloud unavailable, show local config membership and mark audit activity unavailable.
 - If identity is not a member, show pending/request guidance.
 
-### 6.11 Agent Guidance Flow
+### 6.12 Agent Guidance Flow
 
 Agent guidance is exposed through `propagate init` in MVP. A later `propagate agents setup` command can reuse the same service.
 
@@ -805,10 +852,10 @@ Common error payload:
 | `GET /v1/teams/{team_id}/config` | `config pull` | Return current normalized config snapshot |
 | `POST /v1/teams/{team_id}/config/push` | `config push` | Apply admin-approved config decisions and envelopes |
 | `GET /v1/teams/{team_id}/scopes/{scope}/key-envelope` | `config push` | Return the actor's active encrypted scope key envelope for approval/envelope creation |
-| `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle` | `env pull`, `env push`, `env set` | Return active envelope and encrypted current values |
+| `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle` | `env pull`, `run`, `env push`, `env set` | Return active envelope and encrypted current values |
 | `POST /v1/teams/{team_id}/scopes/{scope}/env/push` | `env push`, `env set` | Apply encrypted upserts/removals, including single-value updates, with version checks |
 | `GET /v1/teams/{team_id}/scopes/{scope}/env/status` | `env status` | Return safe env metadata and encrypted values if needed for masking |
-| `POST /v1/teams/{team_id}/events/pull` | `env pull` | Record successful pull event |
+| `POST /v1/teams/{team_id}/events/pull` | `env pull`, `run` | Record successful pull or process injection event |
 | `GET /v1/teams/{team_id}/status` | `team status` | Return membership and audit summaries |
 
 ### 7.3 `GET /v1/version`
@@ -1217,6 +1264,7 @@ The sentinel must not appear in:
 | Removed cloud variable exists locally | Preserve by default and warn |
 | Duplicate variable in same file | Warn and require confirmation |
 | Duplicate variable across files in same scope | Warn and require confirmation |
+| Duplicate variable across files during `run` | Reject before starting the child process |
 | Tracked env file | Warn strongly and offer `.gitignore` help |
 | Unknown shell syntax | Preserve and avoid managing that line |
 
@@ -1261,11 +1309,12 @@ Recommended implementation sequence:
 12. `config pull`.
 13. `config push`.
 14. `env pull`.
-15. `env push`.
-16. `env set`.
-17. `env status`.
-18. Agent guidance installer.
-19. End-to-end and security regression tests.
+15. `run`.
+16. `env push`.
+17. `env set`.
+18. `env status`.
+19. Agent guidance installer.
+20. End-to-end and security regression tests.
 
 This order front-loads data safety, validation, and read-only contracts before adding mutating flows.
 

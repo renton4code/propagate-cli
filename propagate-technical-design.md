@@ -96,6 +96,7 @@ The shared output renderer should provide:
 Human result renderers should use this shared style for the command groups:
 
 - `propagate init`
+- `propagate run`
 - `propagate team join`
 - `propagate team status`
 - `propagate scope create`
@@ -843,7 +844,25 @@ Safety rules:
 
 For `prod`, the CLI should require an additional confirmation before writing to a local env file unless the user has configured a trusted non-interactive mode.
 
-### 13.8 Env Push
+### 13.8 Process Injection
+
+1. User runs `propagate run --scope dev -- COMMAND [args...]`.
+2. CLI loads identity and config.
+3. CLI sends the same signed read request used by env pull.
+4. Server verifies read access and returns encrypted secret versions plus the member's active scope key envelope.
+5. CLI decrypts the scope key locally.
+6. CLI decrypts env values locally.
+7. CLI flattens values into `NAME=value` process environment entries.
+8. If two configured env files in the selected scope contain the same variable name, CLI refuses before starting the child process because process environments cannot preserve file-path identity.
+9. CLI records a safe injection audit event through the pull-event endpoint with client kind `cli_run`.
+10. CLI starts the child process with inherited stdin, stdout, stderr, working directory, and environment plus injected values. Injected values override inherited variables with the same name.
+11. CLI exits with the child process exit code.
+
+`propagate run` must not write local env files or print decrypted values in Propagate-owned output. It also cannot guarantee child output safety: once values are injected, the child process can read, log, print, or pass them to descendants.
+
+For `prod`, the CLI should require confirmation before process injection. Non-interactive prod injection requires `--yes`.
+
+### 13.9 Env Push
 
 1. User runs `propagate env push`, optionally selecting a scope.
 2. CLI loads identity and config.
@@ -863,7 +882,7 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 
 If the user lacks write access, the CLI should refuse before upload and explain how to request access.
 
-### 13.9 Env Set
+### 13.10 Env Set
 
 1. User runs `propagate env set NAME --scope dev` or omits `--scope` for interactive selection.
 2. CLI validates the variable name. `--value-stdin` is validated before config loading so missing piped input fails early.
@@ -885,7 +904,7 @@ If the user lacks write access, the CLI should refuse before upload and explain 
 
 The plaintext value must never be accepted as a positional command argument, shown in output, written as a sensitive literal in `propagate.yaml`, or logged. `env set` should not update local env files unless a future explicit flag requests it.
 
-### 13.10 Env Status
+### 13.11 Env Status
 
 `propagate env status` should fetch the latest cloud config snapshot and the encrypted env status bundle. The CLI decrypts the scope key locally, hashes local env file values with the declaration algorithm, and compares those local digests to the latest cloud declarations.
 
@@ -897,7 +916,7 @@ The command should report:
 - Last updated metadata from cloud secret versions.
 - Next steps: `propagate config pull` when YAML is stale, and `propagate env pull` when values differ or are missing.
 
-### 13.11 Team Status
+### 13.12 Team Status
 
 `propagate team status` should combine local config and cloud audit summaries:
 
@@ -1059,6 +1078,8 @@ Command contract requirements:
 | Operation IDs | Mutating commands should return operation IDs in JSON so agents can report and retry safely |
 | Next steps | Errors should include safe remediation, such as requesting access or asking an admin to approve a pending join |
 
+For `propagate run`, output safety applies to Propagate-owned output only. The child process receives plaintext values by design, so its stdout and stderr are outside Propagate's ability to sanitize.
+
 Agent guidance should recommend discovery commands first: config status, team status, env status, and dry-run variants. It should discourage direct `.env` inspection unless the user explicitly asks and local policy allows it.
 
 ### 17.5 Agent Audit Metadata
@@ -1205,8 +1226,10 @@ Guardrails:
 
 - Extra confirmation before importing prod env values.
 - Extra confirmation before pulling prod env values to local files.
+- Extra confirmation before injecting prod env values into a child process.
 - Clear display of identity and target file path.
 - Refuse non-interactive prod writes unless an explicit flag or config setting is present.
+- Refuse non-interactive prod process injection unless `--yes` is present.
 - Prefer admin-only write access by default.
 
 ## 20. Edge Cases And Expected Behavior
@@ -1269,7 +1292,7 @@ Audit metadata should include:
 - Client kind, such as human terminal, script, or AI agent when known.
 - Agent adapter name when known and safe.
 - Operation ID.
-- Counts of variables added, changed, removed, or pulled.
+- Counts of variables added, changed, removed, pulled, or injected into a process.
 
 Audit metadata should not include:
 
@@ -1296,7 +1319,7 @@ Recommended coverage:
 | Supabase transactions | Config push atomicity, env push conflicts, env set partial updates, idempotent retries |
 | Agent guidance | Target detection, managed block replacement, idempotent reruns, malformed marker handling, no env value leakage |
 | Agent command contracts | JSON schema stability, exit codes, non-interactive failure, dry-run summaries |
-| End-to-end flows | First setup, join request, admin approval, env pull, env push, env set, revoke access |
+| End-to-end flows | First setup, join request, admin approval, env pull, process injection, env push, env set, revoke access |
 
 Security-specific tests should assert that sensitive plaintext env values never appear in logs, command output, audit rows, config snapshots, `propagate.yaml`, or API error bodies. Public-looking and placeholder values are sensitive by default unless explicitly marked `non_sensitive`; sentinel fixtures should cover both default-sensitive and explicit non-sensitive cases.
 
@@ -1375,6 +1398,7 @@ Operational recommendations:
 - `propagate config push`.
 - `propagate config edit`.
 - `propagate env pull`.
+- `propagate run`.
 - `propagate env push`.
 - `propagate env set`.
 - `propagate env status`.
