@@ -98,6 +98,7 @@ Human result renderers should use this shared style for the command groups:
 - `propagate init`
 - `propagate run`
 - `propagate team join`
+- `propagate team invite`
 - `propagate team status`
 - `propagate scope create`
 - `propagate config status`
@@ -469,7 +470,34 @@ Important constraints:
 - The cloud must never store raw plaintext hashes of env values, because low-entropy values can be guessed offline.
 - If diff optimization needs fingerprints, use a keyed construction where the key is unavailable to the cloud, or skip server-side value fingerprints for MVP.
 
-### 9.10 audit_events
+### 9.10 team_pin_invites
+
+Stores **admin-created PIN invites** used to bind a pending Git-mediated join to an expected person (planned feature; see PRD §6.2.1). The database must never store plaintext PINs.
+
+| Column | Purpose |
+| --- | --- |
+| id | Opaque invite identifier returned to joiners after listing |
+| team_id | Parent team |
+| label | Admin-entered display name for selection in `propagate team join` |
+| pin_verifier | Slow hash or other verification material for the PIN; never reversible to plaintext |
+| status | `active`, `redeemed`, `revoked`, `invalidated_pin` (or equivalent terminal states) |
+| failed_pin_attempts | Count of rejected PIN submissions (implementation caps behavior before lockout) |
+| requested_role | Optional default role copied into pending join |
+| requested_scopes | Optional default scope access copied into pending join |
+| created_by_key_sha | Admin who created the invite |
+| created_at | Creation timestamp |
+| redeemed_at | When PIN was verified successfully |
+| redeemed_by_key_sha | Joiner identity after successful PIN verification |
+| expires_at | Optional TTL |
+| revoked_at | When admin revoked or system invalidated |
+
+Important constraints:
+
+- At most one successful redemption per invite.
+- **PIN attempt policy**: allow **two** failed PIN checks; the **third** failed submission transitions the invite to a terminal failure state (`invalidated_pin` or equivalent) so it cannot be used again. Implementations should apply this atomically in the stored function that processes PIN attempts.
+- Listing for joiners is **unauthenticated** in the product design: callers supply `team_id` from `propagate.yaml`. Rate limit aggressively and rely on invite TTL; teams must treat repository access as the primary confidentiality boundary for `team_id`. Optional hardening: a future listing token or signed URL model (PRD open questions).
+
+### 9.11 audit_events
 
 Stores append-only product audit history.
 
@@ -492,7 +520,7 @@ Important constraints:
 - Metadata must be scrubbed to prevent secret leakage.
 - Pull and push events should include CLI version and env file paths.
 
-### 9.11 request_nonces
+### 9.12 request_nonces
 
 Stores short-lived replay protection records for signed API requests.
 
@@ -533,6 +561,11 @@ Permission behavior:
 
 The client should also perform local permission checks for early, friendly errors. The server remains authoritative.
 
+**PIN invite routes (planned)** are exceptions to the usual member-only reads:
+
+- **Public invite listing** by `team_id` returns only non-secret metadata for `active` invites and must be rate limited at the edge and in application logic.
+- **PIN submission** associates a joiner identity: the request is signed by the joiner's Propagate key, but the actor is **not** yet a team member. The API should validate signatures and reject requests that attempt to read encrypted env material or bypass the two-failed-then-lockout rule.
+
 ## 11. Supabase Postgres Stored Functions
 
 The Go Cloud Run API is the public HTTPS boundary, but selected data-local logic should live in Supabase Postgres stored functions for performance, consistency, and transactional safety.
@@ -551,6 +584,7 @@ Stored functions should not expose raw tables directly to the CLI. The Go API sh
 | Audit event append | Audit rows should be written in the same transaction as the operation they describe |
 | Audit summaries | `team status` can efficiently compute last pull per member, members who never pulled, and recent activity near the data |
 | Expired nonce cleanup | Short-lived replay records can be removed by a scheduled function using the `expires_at` index |
+| PIN invite create/redeem/revoke | Atomic updates for attempt counters, redemption, and invalidation; same-transaction audit rows |
 
 ### 11.2 Responsibilities That Should Stay Outside Stored Functions
 
@@ -723,18 +757,27 @@ Failure handling:
 - If env import is canceled, no cloud team should be created.
 - If agent guidance writing fails, project setup should remain successful and the CLI should report how to retry the guidance step later.
 
+### 13.1.1 Admin PIN invite (planned)
+
+1. Admin runs `propagate team invite` with label and optional default role/scopes.
+2. CLI sends signed `create_invite` request; API generates random PIN, stores verifier only, returns PIN once in the response body.
+3. CLI prints PIN exactly once. Documentation should warn about shell history and screen shoulder-surfing.
+4. Admin communicates PIN out of band.
+5. Admin can list or revoke invites before redemption using `propagate team invite list` or `revoke`.
+
 ### 13.2 Developer Join
 
 1. Developer can run `propagate init` to create or load identity, then run `propagate team join`.
 2. For an already configured repository, developer can instead run `propagate team join --init --handle bob@example.com --scope dev=read` to combine existing-project init and the join request.
 3. When `--init` is present, CLI runs the existing-project init path first: create or load identity, verify `propagate.yaml` exists, and offer or apply agent guidance. It must not create a new project config in the join path.
-4. CLI reads `propagate.yaml`.
-5. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested role, requested scopes, and timestamp.
-6. CLI writes `propagate.yaml`.
-7. CLI explains that no secret access has been granted.
-8. Developer commits the config diff and opens a pull request.
+4. CLI reads `propagate.yaml` for validation and `team_id`.
+5. CLI queries the cloud for **active invite codes** for the team. **If none**, proceed directly to the git-mediated pending join (add pending request, write `propagate.yaml`). **If one or more exist**, the Bubble Tea UI offers **Request to join** (git-mediated pending join only) or **Join by invite code** (PIN subflow: list invites, optional row selection when multiple, signed PIN verification with lockout semantics, then pending join with optional invite metadata).
+6. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested role, requested scopes, timestamp, and optional invite correlation fields when the user redeemed an invite code.
+7. CLI writes `propagate.yaml`.
+8. CLI explains that no secret access has been granted.
+9. Developer commits the config diff and opens a pull request.
 
-The cloud does not need to know about the request until an admin pushes the approved config. This keeps the access request reviewable in Git.
+For **git-mediated** join requests, the cloud does not need to know about the pending row until an admin pushes the approved config. **Invite-code redemption** still produces git-mediated pending entries in `propagate.yaml`; the cloud additionally tracks invite state so duplicate redemptions cannot occur. This keeps access requests reviewable in Git.
 
 ### 13.3 Admin Config Push
 
@@ -1204,6 +1247,7 @@ The Config Push TUI should show:
 - Requested scopes.
 - Whether the same key or handle already exists.
 - Whether the request came from local config changes not yet committed.
+- Whether the request includes **PIN invite** metadata (`source_invite_id` / label) when present.
 
 The CLI should encourage admins to review the Git diff before approving. It should not auto-approve pending joins.
 
@@ -1264,6 +1308,10 @@ Guardrails:
 | Agent instruction file has malformed managed block | CLI refuses automatic update and offers a repair or manual instructions |
 | Multiple agent systems detected | CLI lets the user choose targets and reports each created, updated, skipped, or failed target |
 | Non-interactive agent invokes mutating command without approval | CLI fails with a stable exit code and suggests dry-run or explicit human-approved mode |
+| PIN invite: third failed PIN attempt (planned) | Server marks invite invalid; CLI tells joiner to contact admin for a new invite |
+| PIN invite: redeem after invite expired or revoked (planned) | Server rejects; CLI explains invite is no longer valid |
+| PIN invite: list empty but admin said PIN was issued (planned) | Often means lockout, redemption, expiry, or wrong `team_id`; CLI points to status commands for admins |
+| `team join` with active invites but `--non-interactive` and no join-mode flag (planned) | CLI fails with stable error; user must pick **Request to join** or **Join by invite code** in interactive mode or pass explicit flags |
 | Agent guidance write fails | Propagate project setup remains valid; CLI reports the failed target and retry path |
 
 ## 21. Observability And Auditing

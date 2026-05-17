@@ -934,3 +934,29 @@ func validPermission(permission string) bool {
 		return false
 	}
 }
+
+// ValidateRole checks requested Propagate member roles.
+func ValidateRole(role string) error {
+	switch role {
+	case "admins", "developers":
+		return nil
+	default:
+		return fmt.Errorf("unsupported role %q", role)
+	}
+}
+
+// ValidateScopeName checks scope keys in config and invite metadata.
+func ValidateScopeName(name string) error {
+	if !scopeNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid scope name %q", name)
+	}
+	return nil
+}
+
+// ValidatePermission checks scope access permission strings.
+func ValidatePermission(permission string) error {
+	if validPermission(permission) {
+		return nil
+	}
+	return fmt.Errorf("unsupported permission %q", permission)
+}

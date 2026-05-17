@@ -27,6 +27,9 @@ type teamJoinOptions struct {
 	IncludeInit       bool
 	InitAgentGuidance bool
 	InitSkipGuidance  bool
+	JoinMode          string
+	InviteID          string
+	InvitePIN         string
 }
 
 type scopeFlags []string
@@ -61,6 +64,8 @@ func runTeamCommand(args []string, global globalOptions, streams Streams) int {
 	switch args[0] {
 	case "join":
 		return runTeamJoinCommand(args[1:], global, streams)
+	case "invite":
+		return runTeamInviteCommand(args[1:], global, streams)
 	case "status":
 		return runTeamStatusCommand(args[1:], global, streams)
 	case "help", "--help", "-h":
@@ -87,6 +92,9 @@ func runTeamJoinCommand(args []string, global globalOptions, streams Streams) in
 	fs.BoolVar(&opts.IncludeInit, "init", false, "run existing-project init before adding the join request")
 	fs.BoolVar(&opts.InitAgentGuidance, "agent-guidance", false, "with --init, create or update generic AGENTS.md Propagate guidance")
 	fs.BoolVar(&opts.InitSkipGuidance, "skip-agent-guidance", false, "with --init, skip agent guidance setup")
+	fs.StringVar(&opts.JoinMode, "join-mode", "auto", "when invite codes exist: auto, request (git-mediated only), or invite (PIN verification)")
+	fs.StringVar(&opts.InviteID, "invite-id", "", "invite to redeem when multiple active invites exist or for non-interactive invite join")
+	fs.StringVar(&opts.InvitePIN, "pin", "", "invite PIN for non-interactive join-mode invite (4 digits + letter)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -241,6 +249,17 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 	}
 	result.RequestedScopes = requestedScopes
 
+	inviteMeta, err := resolveInviteJoinIfNeeded(streams, &opts, project.TeamID, summary, ident, requestedScopes)
+	if err != nil {
+		return TeamJoinResult{}, err
+	}
+	if inviteMeta != nil {
+		result.Warnings = append(result.Warnings, inviteMeta.Warnings...)
+		if inviteMeta.BackendStatus != "" {
+			result.BackendStatus = inviteMeta.BackendStatus
+		}
+	}
+
 	request := config.JoinRequest{
 		Handle:              summary.Handle,
 		PublicKeySHA:        summary.PublicKeySHA,
@@ -249,6 +268,11 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		RequestedRole:       opts.RequestedRole,
 		RequestedScopes:     requestedScopes,
 		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
+	}
+	if inviteMeta != nil {
+		request.SourceInviteID = inviteMeta.SourceInviteID
+		request.SourceInviteLabel = inviteMeta.SourceInviteLabel
+		request.RedemptionID = inviteMeta.RedemptionID
 	}
 
 	nextConfig, err := config.RenderWithPendingJoin(project, request)
@@ -405,6 +429,7 @@ func printTeamHelp(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  join      add a Git-reviewed pending join request to propagate.yaml")
+	fmt.Fprintln(w, "  invite    create, list, or revoke PIN invites (admin)")
 	fmt.Fprintln(w, "  status    show local membership and cloud team activity")
 }
 
@@ -420,6 +445,9 @@ func printTeamJoinHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --init                   run existing-project init before adding the join request")
 	fmt.Fprintln(w, "  --agent-guidance         with --init, create or update AGENTS.md guidance")
 	fmt.Fprintln(w, "  --skip-agent-guidance    with --init, skip AGENTS.md guidance")
+	fmt.Fprintln(w, "  --join-mode MODE         auto|request|invite when API reports active invite codes")
+	fmt.Fprintln(w, "  --invite-id ID           invite to redeem (non-interactive / multi-invite)")
+	fmt.Fprintln(w, "  --pin VALUE              invite PIN for non-interactive invite join")
 	fmt.Fprintln(w, "  --json                   render machine-readable JSON")
 	fmt.Fprintln(w, "  --non-interactive        fail instead of prompting")
 }

@@ -117,6 +117,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 			"team_setup":        true,
 			"request_signing":   true,
 			"encrypted_secrets": true,
+			"team_invites":      true,
 		},
 	}
 	writeJSON(w, http.StatusOK, Envelope{
@@ -349,6 +350,22 @@ func (s *Server) handleTeamRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleEnvPush(w, r, requestID, teamID, parts[2])
 	case len(parts) == 3 && parts[1] == "events" && parts[2] == "pull":
 		s.handlePullEvent(w, r, requestID, teamID)
+	case len(parts) == 3 && parts[1] == "join" && parts[2] == "invites":
+		s.handleJoinInvitesList(w, r, requestID, teamID)
+	case len(parts) == 5 && parts[1] == "join" && parts[2] == "invites" && parts[4] == "pin":
+		s.handleInvitePINSubmit(w, r, requestID, teamID, parts[3])
+	case len(parts) == 2 && parts[1] == "invites":
+		if r.Method == http.MethodGet {
+			s.handleAdminInvitesList(w, r, requestID, teamID)
+			return
+		}
+		if r.Method == http.MethodPost {
+			s.handleAdminInviteCreate(w, r, requestID, teamID)
+			return
+		}
+		s.writeError(w, requestID, "", newAPIError(http.StatusMethodNotAllowed, "usage_error", "method not allowed"))
+	case len(parts) == 4 && parts[1] == "invites" && parts[3] == "revoke":
+		s.handleAdminInviteRevoke(w, r, requestID, teamID, parts[2])
 	default:
 		s.writeError(w, requestID, "", newAPIError(http.StatusNotFound, "usage_error", "unknown endpoint"))
 	}
@@ -537,6 +554,8 @@ func (s *Server) writeStorageError(w http.ResponseWriter, requestID string, oper
 		s.writeError(w, requestID, operationID, newAPIError(http.StatusConflict, "idempotency_conflict", "operation_id was reused with a different payload"))
 	case errors.Is(err, storage.ErrSecretConflict):
 		s.writeError(w, requestID, operationID, newAPIError(http.StatusConflict, "secret_version_conflict", "one or more variables changed before this write"))
+	case errors.Is(err, storage.ErrInviteNotActive):
+		s.writeError(w, requestID, operationID, newAPIError(http.StatusConflict, "invite_not_active", "invite is not in a state that allows this operation"))
 	default:
 		apiErr := newAPIError(http.StatusInternalServerError, "server_error", "request could not be completed")
 		apiErr.body.Retryable = true

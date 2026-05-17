@@ -84,6 +84,9 @@ type JoinRequest struct {
 	RequestedRole       string            `json:"requested_role"`
 	RequestedScopes     map[string]string `json:"requested_scopes"`
 	CreatedAt           string            `json:"created_at"`
+	SourceInviteID      string            `json:"source_invite_id,omitempty"`
+	SourceInviteLabel   string            `json:"source_invite_label,omitempty"`
+	RedemptionID        string            `json:"redemption_id,omitempty"`
 }
 
 type Project struct {
@@ -622,6 +625,12 @@ func assignJoinField(join *JoinRequest, key, value string) {
 		join.RequestedRole = value
 	case "created_at":
 		join.CreatedAt = value
+	case "source_invite_id":
+		join.SourceInviteID = value
+	case "source_invite_label":
+		join.SourceInviteLabel = value
+	case "redemption_id":
+		join.RedemptionID = value
 	}
 }
 
@@ -1006,6 +1015,15 @@ func renderJoinRequest(request JoinRequest) []string {
 		for _, scope := range sortedMapKeys(request.RequestedScopes) {
 			lines = append(lines, "        "+scope+": "+request.RequestedScopes[scope])
 		}
+	}
+	if strings.TrimSpace(request.SourceInviteID) != "" {
+		lines = append(lines, "      source_invite_id: "+quote(request.SourceInviteID))
+	}
+	if strings.TrimSpace(request.SourceInviteLabel) != "" {
+		lines = append(lines, "      source_invite_label: "+quote(request.SourceInviteLabel))
+	}
+	if strings.TrimSpace(request.RedemptionID) != "" {
+		lines = append(lines, "      redemption_id: "+quote(request.RedemptionID))
 	}
 	lines = append(lines, "      created_at: "+quote(request.CreatedAt))
 	return lines

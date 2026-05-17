@@ -761,6 +761,8 @@ func mapAPIError(err error, message string) error {
 	switch apiErr.Code {
 	case "permission_denied":
 		return commandError(ExitPermissionDenied, apiErr.Code, message, apiErr)
+	case "invite_pin_invalid", "invite_locked", "invite_not_active":
+		return commandError(ExitValidationError, apiErr.Code, message, apiErr)
 	case "revision_conflict", "idempotency_conflict":
 		return commandError(ExitConflict, apiErr.Code, message, apiErr, "Run `propagate config pull`, review the diff, and retry config push.")
 	case "validation_failed", "usage_error":

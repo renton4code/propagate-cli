@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"propagate/backend/internal/domain"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type MemoryStore struct {
@@ -42,6 +45,21 @@ type memoryTeam struct {
 	configOps      map[string]memoryOperation[domain.ConfigPushResult]
 	envOps         map[string]memoryOperation[domain.EnvPushResult]
 	audit          []memoryAudit
+	invites        map[string]*memoryInvite
+}
+
+type memoryInvite struct {
+	id               string
+	label            string
+	pinVerifier      []byte
+	status           string
+	failedAttempts   int
+	requestedRole    string
+	requestedScopes  map[string]string
+	createdBy        string
+	createdAt        time.Time
+	redeemedAt       time.Time
+	redeemedByKeySHA string
 }
 
 type memoryScope struct {
@@ -134,6 +152,7 @@ func (s *MemoryStore) CreateTeamSetup(_ context.Context, request domain.TeamSetu
 		scopes:         map[string]*memoryScope{},
 		configOps:      map[string]memoryOperation[domain.ConfigPushResult]{},
 		envOps:         map[string]memoryOperation[domain.EnvPushResult]{},
+		invites:        map[string]*memoryInvite{},
 	}
 	team.members[request.FirstAdmin.PublicKeySHA] = domain.Member{
 		PublicIdentity: request.FirstAdmin,
@@ -777,6 +796,189 @@ func scopeNames(scopes []domain.SetupScope) []string {
 
 func variableKey(path, name string) string {
 	return path + "\x00" + name
+}
+
+func randomInviteID() (string, error) {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return "inv_" + hex.EncodeToString(raw), nil
+}
+
+func (s *MemoryStore) CreateTeamInvite(_ context.Context, teamID string, actor domain.Member, request domain.CreateTeamInviteRequest) (domain.CreateTeamInviteResult, error) {
+	role := strings.TrimSpace(request.RequestedRole)
+	if role == "" {
+		role = "developers"
+	}
+	scopes := copyStringMap(request.RequestedScopes)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team, err := s.teamForActor(teamID, actor)
+	if err != nil {
+		return domain.CreateTeamInviteResult{}, err
+	}
+	if actor.Role != "admins" {
+		return domain.CreateTeamInviteResult{}, ErrPermissionDenied
+	}
+
+	pin, err := domain.GenerateInvitePIN()
+	if err != nil {
+		return domain.CreateTeamInviteResult{}, err
+	}
+	normPIN, err := domain.NormalizeInvitePIN(pin)
+	if err != nil {
+		return domain.CreateTeamInviteResult{}, err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(normPIN), bcrypt.DefaultCost)
+	if err != nil {
+		return domain.CreateTeamInviteResult{}, err
+	}
+	inviteID, err := randomInviteID()
+	if err != nil {
+		return domain.CreateTeamInviteResult{}, err
+	}
+	team.invites[inviteID] = &memoryInvite{
+		id:              inviteID,
+		label:           strings.TrimSpace(request.Label),
+		pinVerifier:     hash,
+		status:          "active",
+		requestedRole:   role,
+		requestedScopes: scopes,
+		createdBy:       actor.PublicKeySHA,
+		createdAt:       time.Now().UTC(),
+	}
+	return domain.CreateTeamInviteResult{
+		InviteID: inviteID,
+		PIN:      pin,
+		Label:    strings.TrimSpace(request.Label),
+	}, nil
+}
+
+func (s *MemoryStore) ListJoinerInvites(_ context.Context, teamID string) (domain.JoinerInvitesData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team := s.teams[teamID]
+	if team == nil {
+		return domain.JoinerInvitesData{Invites: []domain.JoinerInviteRow{}}, nil
+	}
+	var rows []domain.JoinerInviteRow
+	for _, inv := range team.invites {
+		if inv.status != "active" {
+			continue
+		}
+		rows = append(rows, domain.JoinerInviteRow{
+			InviteID:  inv.id,
+			Label:     inv.label,
+			CreatedAt: inv.createdAt.UTC().Format(time.RFC3339),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].CreatedAt < rows[j].CreatedAt
+	})
+	return domain.JoinerInvitesData{Invites: rows}, nil
+}
+
+func (s *MemoryStore) SubmitInvitePIN(_ context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string) (domain.InvitePINResult, error) {
+	normPIN, err := domain.NormalizeInvitePIN(request.PIN)
+	if err != nil {
+		return domain.InvitePINResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team := s.teams[teamID]
+	if team == nil {
+		return domain.InvitePINResult{}, ErrNotFound
+	}
+	inv := team.invites[inviteID]
+	if inv == nil {
+		return domain.InvitePINResult{}, ErrNotFound
+	}
+	if inv.status != "active" {
+		return domain.InvitePINResult{}, ErrInviteNotActive
+	}
+
+	if err := bcrypt.CompareHashAndPassword(inv.pinVerifier, []byte(normPIN)); err == nil {
+		inv.status = "redeemed"
+		inv.redeemedAt = time.Now().UTC()
+		inv.redeemedByKeySHA = request.Joiner.PublicKeySHA
+		raw := make([]byte, 10)
+		if _, rerr := rand.Read(raw); rerr != nil {
+			return domain.InvitePINResult{}, rerr
+		}
+		redemptionID := "red_" + hex.EncodeToString(raw)
+		return domain.InvitePINResult{
+			RedemptionID: redemptionID,
+			InviteID:     inviteID,
+			ServerTime:   serverTime,
+		}, nil
+	}
+
+	inv.failedAttempts++
+	if inv.failedAttempts >= 3 {
+		inv.status = "invalidated_pin"
+		return domain.InvitePINResult{}, ErrInviteLocked
+	}
+	return domain.InvitePINResult{}, ErrInvitePINInvalid
+}
+
+func (s *MemoryStore) ListAdminInvites(_ context.Context, teamID string, actor domain.Member) (domain.AdminInvitesData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team, err := s.teamForActor(teamID, actor)
+	if err != nil {
+		return domain.AdminInvitesData{}, err
+	}
+	if actor.Role != "admins" {
+		return domain.AdminInvitesData{}, ErrPermissionDenied
+	}
+	var rows []domain.AdminInviteRow
+	for _, inv := range team.invites {
+		row := domain.AdminInviteRow{
+			InviteID:          inv.id,
+			Label:             inv.label,
+			Status:            inv.status,
+			FailedPINAttempts: inv.failedAttempts,
+			CreatedAt:         inv.createdAt.UTC().Format(time.RFC3339),
+		}
+		if !inv.redeemedAt.IsZero() {
+			row.RedeemedAt = inv.redeemedAt.UTC().Format(time.RFC3339)
+			row.RedeemedByKeySHA = inv.redeemedByKeySHA
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].CreatedAt < rows[j].CreatedAt
+	})
+	return domain.AdminInvitesData{Invites: rows}, nil
+}
+
+func (s *MemoryStore) RevokeTeamInvite(_ context.Context, teamID string, inviteID string, actor domain.Member) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team, err := s.teamForActor(teamID, actor)
+	if err != nil {
+		return err
+	}
+	if actor.Role != "admins" {
+		return ErrPermissionDenied
+	}
+	inv := team.invites[inviteID]
+	if inv == nil {
+		return ErrNotFound
+	}
+	if inv.status != "active" {
+		return ErrInviteNotActive
+	}
+	inv.status = "revoked"
+	return nil
 }
 
 func randomTeamID() (string, error) {

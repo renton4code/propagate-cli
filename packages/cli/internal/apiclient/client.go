@@ -135,6 +135,68 @@ type ClientMetadata struct {
 	ClientKind string `json:"client_kind,omitempty"`
 }
 
+// JoinerInviteRow is a non-secret invite listing entry for join-by-invite-code.
+type JoinerInviteRow struct {
+	InviteID  string `json:"invite_id"`
+	Label     string `json:"label"`
+	CreatedAt string `json:"created_at"`
+}
+
+// JoinerInvitesData is returned by the unauthenticated join invites list endpoint.
+type JoinerInvitesData struct {
+	Invites []JoinerInviteRow `json:"invites"`
+}
+
+// CreateTeamInviteRequest creates a PIN-backed invite (admin only).
+type CreateTeamInviteRequest struct {
+	OperationID     string            `json:"operation_id"`
+	Label             string            `json:"label"`
+	RequestedRole     string            `json:"requested_role,omitempty"`
+	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
+	Client            ClientMetadata    `json:"client,omitempty"`
+}
+
+// CreateTeamInviteResult includes the PIN once at creation time.
+type CreateTeamInviteResult struct {
+	InviteID string `json:"invite_id"`
+	PIN      string `json:"pin,omitempty"`
+	Label    string `json:"label"`
+}
+
+// InvitePINRequest redeems an invite for a joiner's identity (signed).
+type InvitePINRequest struct {
+	OperationID     string            `json:"operation_id"`
+	PIN             string            `json:"pin"`
+	Joiner          PublicIdentity    `json:"joiner"`
+	Handle          string            `json:"handle"`
+	RequestedRole   string            `json:"requested_role,omitempty"`
+	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
+	Client          ClientMetadata    `json:"client,omitempty"`
+}
+
+// InvitePINResult is returned after a successful PIN verification.
+type InvitePINResult struct {
+	RedemptionID string `json:"redemption_id"`
+	InviteID     string `json:"invite_id"`
+	ServerTime   string `json:"server_time"`
+}
+
+// AdminInviteRow is an operational view of invite state (admin only).
+type AdminInviteRow struct {
+	InviteID           string `json:"invite_id"`
+	Label              string `json:"label"`
+	Status             string `json:"status"`
+	FailedPINAttempts  int    `json:"failed_pin_attempts"`
+	CreatedAt          string `json:"created_at"`
+	RedeemedAt         string `json:"redeemed_at,omitempty"`
+	RedeemedByKeySHA   string `json:"redeemed_by_key_sha,omitempty"`
+}
+
+// AdminInvitesData lists invites for a team (admin only).
+type AdminInvitesData struct {
+	Invites []AdminInviteRow `json:"invites"`
+}
+
 type ConfigPushResult struct {
 	OldRevision      string          `json:"old_revision"`
 	NewRevision      string          `json:"new_revision"`
@@ -422,6 +484,105 @@ func (c Client) TeamStatus(ctx context.Context, ident identity.Identity, teamID 
 		return TeamStatusData{}, err
 	}
 	return out, nil
+}
+
+func (c Client) GetJoinInvitesPublic(ctx context.Context, teamID string) (JoinerInvitesData, error) {
+	var out JoinerInvitesData
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/join/invites"
+	if err := c.doPublic(ctx, http.MethodGet, endpoint, "", &out); err != nil {
+		return JoinerInvitesData{}, err
+	}
+	return out, nil
+}
+
+func (c Client) SubmitInvitePIN(ctx context.Context, ident identity.Identity, teamID, inviteID string, request InvitePINRequest) (InvitePINResult, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return InvitePINResult{}, err
+	}
+	var out InvitePINResult
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/join/invites/" + url.PathEscape(inviteID) + "/pin"
+	if err := c.do(ctx, ident, http.MethodPost, endpoint, "", body, request.OperationID, &out); err != nil {
+		return InvitePINResult{}, err
+	}
+	return out, nil
+}
+
+func (c Client) CreateTeamInvite(ctx context.Context, ident identity.Identity, teamID string, request CreateTeamInviteRequest) (CreateTeamInviteResult, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return CreateTeamInviteResult{}, err
+	}
+	var out CreateTeamInviteResult
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/invites"
+	if err := c.do(ctx, ident, http.MethodPost, endpoint, "", body, request.OperationID, &out); err != nil {
+		return CreateTeamInviteResult{}, err
+	}
+	return out, nil
+}
+
+func (c Client) ListAdminInvites(ctx context.Context, ident identity.Identity, teamID string) (AdminInvitesData, error) {
+	var out AdminInvitesData
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/invites"
+	if err := c.do(ctx, ident, http.MethodGet, endpoint, "", nil, "", &out); err != nil {
+		return AdminInvitesData{}, err
+	}
+	return out, nil
+}
+
+func (c Client) RevokeTeamInvite(ctx context.Context, ident identity.Identity, teamID, inviteID string) error {
+	body := []byte("{}")
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/invites/" + url.PathEscape(inviteID) + "/revoke"
+	return c.do(ctx, ident, http.MethodPost, endpoint, "", body, "", nil)
+}
+
+func (c Client) doPublic(ctx context.Context, method, endpoint, rawQuery string, out any) error {
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	target, err := c.resolveURL(endpoint, rawQuery)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target.String(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return &APIError{Code: "cloud_unavailable", Message: err.Error(), Retryable: true}
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &APIError{Code: "cloud_unavailable", Message: err.Error(), Retryable: true}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return decodeAPIError(resp.StatusCode, payload)
+	}
+	var envelope struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error *struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			Retryable bool   `json:"retryable"`
+		} `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return err
+	}
+	if !envelope.OK {
+		if envelope.Error != nil {
+			return &APIError{StatusCode: resp.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message, Retryable: envelope.Error.Retryable}
+		}
+		return &APIError{StatusCode: resp.StatusCode, Code: "cloud_unavailable", Message: "API returned an unsuccessful response", Retryable: true}
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(envelope.Data, out)
 }
 
 func (c Client) do(ctx context.Context, ident identity.Identity, method string, endpoint string, rawQuery string, body []byte, operationID string, out any) error {

@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -266,6 +267,84 @@ func TestSequentialCLIAPIWithSupabaseDB(t *testing.T) {
 		}
 		if neverPulledExists(status.NeverPulled, bob.PublicKeySHA) {
 			t.Fatalf("team status still reported Bob as never pulled:\n%+v", status)
+		}
+	})
+
+	t.Run("request join still works while unused invite codes exist", func(t *testing.T) {
+		result := h.run(repo, admin, "", "team", "invite", "--json", "--label", "e2e-request-with-invite", "--scope", "dev=read")
+		var inv teamInviteCreateJSON
+		decodeJSON(t, result.Stdout, &inv)
+		if !inv.OK || inv.InviteID == "" {
+			t.Fatalf("unexpected team invite result: %+v\nstdout:\n%s", inv, result.Stdout)
+		}
+
+		earl := h.newActor("earl@example.com")
+		earl = h.join(repo, earl, "dev=read")
+
+		status := h.teamStatus(repo, admin)
+		if !pendingJoinExists(status.PendingJoins, earl.PublicKeySHA) {
+			t.Fatalf("team status missing Earl after request join:\n%+v", status)
+		}
+		earlYaml := readFile(t, filepath.Join(repo, "propagate.yaml"))
+		requireNotContains(t, earlYaml, "redemption_id:")
+	})
+
+	t.Run("join by invite code records redemption metadata in propagate.yaml", func(t *testing.T) {
+		result := h.run(repo, admin, "", "team", "invite", "--json", "--label", "e2e-invite", "--scope", "dev=read")
+		var inv teamInviteCreateJSON
+		decodeJSON(t, result.Stdout, &inv)
+		if !inv.OK || inv.InviteID == "" || inv.PIN == "" {
+			t.Fatalf("unexpected team invite result: %+v\nstdout:\n%s", inv, result.Stdout)
+		}
+
+		dana := h.newActor("dana@example.com")
+		dana = h.joinByInvite(repo, dana, inv.InviteID, inv.PIN, "dev=read")
+
+		status := h.teamStatus(repo, admin)
+		if !pendingJoinExists(status.PendingJoins, dana.PublicKeySHA) {
+			t.Fatalf("team status missing Dana after invite join:\n%+v", status)
+		}
+
+		yamlText := readFile(t, filepath.Join(repo, "propagate.yaml"))
+		requireContains(t, yamlText, "redemption_id:")
+		requireContains(t, yamlText, "source_invite_id:")
+		requireContains(t, yamlText, inv.InviteID)
+	})
+
+	t.Run("three wrong PIN attempts invalidate invite", func(t *testing.T) {
+		result := h.run(repo, admin, "", "team", "invite", "--json", "--label", "e2e-lockout", "--scope", "dev=read")
+		var inv teamInviteCreateJSON
+		decodeJSON(t, result.Stdout, &inv)
+		if !inv.OK || inv.InviteID == "" || inv.PIN == "" {
+			t.Fatalf("unexpected team invite result: %+v\nstdout:\n%s", inv, result.Stdout)
+		}
+
+		for i := 0; i < 3; i++ {
+			attacker := h.newActor(fmt.Sprintf("badpin%d@example.com", i))
+			badRepo := h.newRepo()
+			copyFile(t, filepath.Join(repo, "propagate.yaml"), filepath.Join(badRepo, "propagate.yaml"), 0o600)
+			res := h.runExpectFailure(badRepo, attacker, "", "team", "join", "--json", "--handle", attacker.Handle, "--non-interactive",
+				"--join-mode", "invite", "--invite-id", inv.InviteID, "--pin", "0000A", "--scope", "dev=read")
+			errJSON := decodeCLIJSON[commandErrorResult](t, res.Stderr)
+			if i < 2 {
+				if errJSON.Error.Code != "invite_pin_invalid" {
+					t.Fatalf("attempt %d want invite_pin_invalid, got %+v\nstderr:\n%s", i+1, errJSON, res.Stderr)
+				}
+			} else {
+				if errJSON.Error.Code != "invite_locked" {
+					t.Fatalf("attempt %d want invite_locked, got %+v\nstderr:\n%s", i+1, errJSON, res.Stderr)
+				}
+			}
+		}
+
+		final := h.newActor("final@example.com")
+		finalRepo := h.newRepo()
+		copyFile(t, filepath.Join(repo, "propagate.yaml"), filepath.Join(finalRepo, "propagate.yaml"), 0o600)
+		res := h.runExpectFailure(finalRepo, final, "", "team", "join", "--json", "--handle", final.Handle, "--non-interactive",
+			"--join-mode", "invite", "--invite-id", inv.InviteID, "--pin", inv.PIN, "--scope", "dev=read")
+		errJSON := decodeCLIJSON[commandErrorResult](t, res.Stderr)
+		if errJSON.Error.Code != "invite_not_active" {
+			t.Fatalf("correct pin after lockout want invite_not_active, got %+v\nstderr:\n%s", errJSON, res.Stderr)
 		}
 	})
 }

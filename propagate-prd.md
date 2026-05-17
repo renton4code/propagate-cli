@@ -111,6 +111,7 @@ Admins can:
 - Push environment variable updates for scopes they can write.
 - Set individual environment variable values for scopes they can write.
 - View team status and last pull events.
+- Create, list, and revoke **PIN-backed join invites** for expected collaborators (planned; see `propagate team invite`).
 
 ### 5.2 Developer
 
@@ -234,17 +235,25 @@ Adds the current user as a pending invite/request in `propagate.yaml`.
    - Confirm that `propagate.yaml` already exists.
    - Offer or apply AI agent guidance using the same guidance behavior as `propagate init`.
    - Do not create a new project config or overwrite an existing config.
-3. Read `propagate.yaml`.
-4. Add a pending join request containing:
+3. Read `propagate.yaml` for validation and to obtain `team_id`.
+4. Query the cloud for **active invite codes** (PIN invites) for this `team_id`.
+5. **If there are no active invite codes**, continue with the **git-mediated join** path only: add the pending join request (step 7 below) without a join-mode prompt.
+6. **If one or more active invite codes exist**, show an interactive **join mode** choice (Bubble Tea TUI) with exactly two options:
+   - **Request to join** — the usual **git-mediated join** (pending request only; no PIN).
+   - **Join by invite code** — run the **invite code subflow** in §6.2.1 (planned): discover invites, select a row when multiple are active, enter the PIN, verify with the signed PIN request, then continue to step 7 with invite correlation fields filled when redemption succeeded.
+   Non-interactive mode must select the path explicitly (exact flags TBD, for example a flag for git-mediated-only vs invite-code join).
+   After **Request to join**, or after a successful **Join by invite code** subflow, continue with step 7.
+7. Add or update the pending join request in the working copy of the config with:
    - Public key SHA.
    - Full public key.
    - Handle.
    - Requested role: `developers`.
    - Requested scopes, if specified.
    - Timestamp.
-5. Save the config file.
-6. Notify the user explicitly that this only creates a Git-reviewed access request.
-7. Tell the user to commit the config diff, open a pull request, and ask an admin to approve it.
+   - Optional: `invite_id` and invite label when the join was created via a redeemed invite code.
+8. Save the config file.
+9. Notify the user explicitly that this only creates a Git-reviewed access request.
+10. Tell the user to commit the config diff, open a pull request, and ask an admin to approve it.
 
 #### Notes
 
@@ -278,6 +287,48 @@ Next steps:
 2. Open a pull request.
 3. Ask a Propagate admin to run propagate config push after approval.
 ```
+
+### 6.2.1 `propagate team invite` (planned)
+
+Admin-only command that creates a **short-lived, human-shareable PIN** tied to a **named invite** on the team. The PIN proves the joiner was expected by an admin; it does **not** replace Git review or `propagate config push` approval.
+
+#### PIN format and generation
+
+- Format: **four decimal digits (0–9) and exactly one Latin letter (A–Z)**.
+- Display and input normalization: **case-insensitive** for the letter; CLI and API normalize to uppercase for comparison.
+- Generation: **cryptographically random** per invite (not sequential, not derived from team or user metadata).
+- Entropy is modest; protection relies on **server-side validation**, **strict attempt limits**, **rate limiting**, and treating `team_id` as a capability (see security notes below).
+
+#### Admin flow
+
+1. Admin runs `propagate team invite` from a repo with `propagate.yaml` (or passes `team_id` if the CLI supports non-interactive admin use).
+2. Admin enters an **invite label**: a human-readable name for this slot (for example `Alice Q1 contractor` or `bob@ — laptop refresh`). This is **metadata for the team**, not proof of email ownership.
+3. CLI sends a signed request to the cloud API; server creates an **active invite** and returns the **PIN once** to the admin terminal output.
+4. Admin shares the PIN **out of band** (in person, encrypted channel, etc.). The CLI must **never** echo the PIN again; admins use labels and invite identifiers in status output.
+
+Optional flags (exact names TBD) should allow prefilling requested role and scopes consistent with `propagate team join`, so the pending request created after redemption matches policy.
+
+#### Join by invite code (subflow inside `propagate team join`, planned)
+
+The user reaches this subflow only after choosing **"Join by invite code"** in the join-mode TUI when active invite codes exist (see §6.2). **Request to join** skips this subflow and only performs the git-mediated pending request.
+
+1. CLI uses or refetches the list of **active, unredeemed** invites from the cloud **without requiring team membership** (see technical design for the capability and abuse model). Each row shows **invite label**, **coarse created time**, and an opaque **invite id** for the redemption call—**never** the PIN.
+2. **If exactly one** active invite exists, the CLI may **omit the invite row selection step** and prompt for the PIN directly (still showing the label in the summary line so the joiner can confirm context).
+3. **If multiple** active invites exist, the joiner **selects the row** that matches what they were told by the admin, then enters the PIN.
+4. CLI submits a **signed PIN verification** request to the cloud (joiner is not yet a member, but the request uses the joiner's Propagate signing identity and replay protection). The server allows **at most two incorrect PIN attempts** for that invite. **On the third failed submission**, the invite becomes **permanently invalid** (removed from the active list or marked in a terminal failure state and unusable for further redemption). A correct PIN on the first or second try **redeems** the invite.
+5. On successful redemption, the pending join written in §6.2 includes **optional correlation fields** (for example `invite_id`, `invite_label`) for audit and admin review. The joiner still **does not** have secret access until an admin approves and runs `propagate config push`.
+
+#### Operational commands (planned)
+
+- `propagate team invite list` (admin): active and recently invalidated invites (without PINs).
+- `propagate team invite revoke <id>` (admin): invalidate without waiting for lockout.
+
+#### Security and product notes
+
+- The cloud stores **only a verifier** for the PIN (for example a slow password-hash or keyed hash construction), never plaintext PINs.
+- **Rate limiting** applies to invite listing and PIN attempts per invite, team, and calling context as implemented.
+- **Default invite expiry** (time-to-live) is recommended; exact policy is left to implementation and open questions.
+- PIN invites reduce mistaken **wrong-person** PRs when many people share a repo, but admins should still verify the public key and handle in the pending join before approval.
 
 ### 6.3 `propagate config push`
 
@@ -922,6 +973,8 @@ pending:
       requested_scopes:
         dev: read
       created_at: "2026-04-30T10:00:00Z"
+      source_invite_id: inv_01hxyzabcd
+      source_invite_label: "Carol — contractor Q1"
   access_changes: []
 ```
 
@@ -934,6 +987,7 @@ Cloud stores:
 - Team metadata.
 - Config revision.
 - Member public keys.
+- **PIN invite records** (verifier only; no plaintext PINs; planned).
 - Encrypted env values.
 - Encrypted access envelopes.
 - Audit events.
@@ -967,6 +1021,7 @@ Events to record:
 - Join requested.
 - Join approved.
 - Join rejected.
+- **PIN invite created, redeemed, revoked, or invalidated after failed PIN attempts (planned).**
 - Scope access granted.
 - Scope access revoked.
 - Env pulled.
@@ -1155,6 +1210,7 @@ MVP success metrics:
 - Automatic leak scanning on commit.
 - Dedicated non-human AI agent identities with explicit scopes.
 - Agent-specific approval policies and richer audit dashboards.
+- **Admin-issued PIN invites** (`propagate team invite`, list/revoke, join integration as in §6.2.1).
 
 ## 17. Suggestions, Design Issues, And Open Questions
 
@@ -1182,6 +1238,7 @@ MVP success metrics:
 - If handles are not verified emails, duplicate or misleading handles are possible.
 - Some env vars may appear public, such as feature flags or local service URLs. The MVP must default them to sensitive; users must explicitly mark a variable `non_sensitive` before Propagate stores a direct literal or preview in Git-backed config.
 - AI agents may be able to read local files and terminal output. Propagate can make the safe path obvious, but it cannot guarantee an agent will not misuse access outside Propagate. Sensitive operations still need CLI and server enforcement.
+- **PIN invites** add a short, memorable shared secret with limited entropy; they rely on server-side hashing, per-invite lockout, rate limits, invite TTL, and treating `team_id` as a capability. They improve social clarity ("this slot was for Alice") but are not a substitute for admin review of the public key in the pending join.
 
 ### Open Questions
 
@@ -1202,3 +1259,6 @@ MVP success metrics:
 - Which agent instruction targets should be first-class in MVP: generic `AGENTS.md`, Codex skills, Cursor rules, Claude instructions, GitHub Copilot instructions, or a smaller initial set?
 - Should agent guidance be enabled by default during `propagate init`, or only when a known agent configuration is detected?
 - Should AI agents ever receive their own Propagate identities, or should MVP agents always operate through the human user's local identity?
+- For **PIN invites**, what default expiry should apply (for example 7 days vs 30 days), and should admins be able to extend an invite without reissuing?
+- Should unauthenticated **invite listing by `team_id`** remain the default join UX, or should teams optionally require an extra **listing token** shared with the joiner to reduce metadata exposure?
+- Should PIN lockout after failed attempts require admin notification (for example in `team status`)?

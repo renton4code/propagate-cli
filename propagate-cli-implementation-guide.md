@@ -329,7 +329,7 @@ Failure behavior:
 
 ### 6.2 `propagate team join`
 
-Purpose: add the current local identity as a pending join request in `propagate.yaml`.
+Purpose: add the current local identity as a pending join request in `propagate.yaml` (**git-mediated join**). When **active invite codes** exist for the team, interactive mode shows a TUI to choose **Request to join** (same git-mediated pending request, no PIN) or **Join by invite code** (PIN subflow per §6.2.1); when **no** invite codes exist, the command proceeds with the git-mediated path only (no join-mode prompt).
 
 Inputs:
 
@@ -338,6 +338,7 @@ Inputs:
 | Requested role | Optional | Defaults to `developers` |
 | Requested scopes | Optional | Defaults to configured developer default |
 | Handle | Required if identity/profile missing handle | Prompt or use existing profile |
+| Join mode (planned) | Required when non-interactive and invites exist | Exact flags TBD |
 
 Local reads:
 
@@ -351,7 +352,8 @@ Local writes:
 
 API calls:
 
-- None required for MVP.
+- None required for MVP baseline.
+- Planned: `GET` active invites for `team_id`; signed `POST` PIN verification when user selects **Join by invite code**.
 
 Success result:
 
@@ -361,6 +363,7 @@ Success result:
 | `public_key_sha` | Current identity |
 | `requested_role` | Requested role |
 | `requested_scopes` | Requested scope permissions |
+| `join_mode` | `git_mediated` or `invite_code` when tracked (planned) |
 | `next_steps` | Commit config diff, open PR, ask admin to run config push |
 
 Failure behavior:
@@ -369,7 +372,53 @@ Failure behavior:
 - Reject invalid config.
 - Reject duplicate pending join for same public key SHA.
 - Reject pending join for an already active member.
+- Planned: non-interactive run with active invites but no join-mode flag fails with a stable error.
 - Make clear that the user does not have secret access yet.
+
+### 6.2.1 `propagate team invite` (planned)
+
+Purpose: allow **admins** to mint **PIN-backed invites** that label an expected joiner and gate the usual Git-mediated `propagate team join` pending entry.
+
+Inputs:
+
+| Input | Required | Notes |
+| --- | --- | --- |
+| Invite label | Yes | Free-text display name for joiner selection lists |
+| Default role/scopes | Optional | Same semantics as `team join` when not overridden by joiner flags |
+
+Local reads:
+
+- Local identity (admin)
+- `propagate.yaml`
+
+Local writes:
+
+- None required; optional cache invalidation for invite list
+
+API calls:
+
+- `POST /v1/teams/{team_id}/invites` (create; signed, admin-only)
+- `GET /v1/teams/{team_id}/invites` (admin list)
+- `DELETE` or `POST .../revoke` for revoke (exact shape TBD)
+
+Success result (create):
+
+| Field | Meaning |
+| --- | --- |
+| `invite_id` | Opaque id for admin/joiner correlation |
+| `pin` | Returned **once** for terminal display only |
+| `label` | Echo of admin label |
+| `expires_at` | If TTL is enabled |
+
+Join-side API calls (see API guide):
+
+- Unauthenticated or loosely authenticated list endpoint (team capability model)
+- Signed PIN verification endpoint with lockout semantics
+
+Failure behavior:
+
+- Reject create if actor is not admin
+- Never log or persist plaintext PIN server-side beyond the initial response payload over TLS
 
 ### 6.3 `propagate config status`
 
@@ -1306,6 +1355,7 @@ Recommended implementation sequence:
 9. `init` identity-only path and existing-project path.
 10. New project setup without agent guidance.
 11. `team join`.
+11a. `team invite` (PIN invites) after join and cloud invite APIs exist.
 12. `config pull`.
 13. `config push`.
 14. `env pull`.

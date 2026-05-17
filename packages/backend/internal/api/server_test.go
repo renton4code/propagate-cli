@@ -462,6 +462,211 @@ func TestEnvPushStatusAndPullEvent(t *testing.T) {
 	}
 }
 
+func TestTeamInvitesJoinerListAndPINRedeem(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	server := NewServer(storage.NewMemoryStore(), Config{Now: func() time.Time { return now }})
+	admin := newTestSigner(t)
+	body := setupBody(t, admin, "op_setup_invites", false)
+
+	setupRec := httptest.NewRecorder()
+	server.ServeHTTP(setupRec, signedSetupRequest(t, admin, body, now, "nonce-setup-inv"))
+	if setupRec.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, body = %s", setupRec.Code, setupRec.Body.String())
+	}
+	teamID := teamIDFromBody(t, setupRec.Body.Bytes())
+
+	createPayload := mustJSON(t, map[string]any{
+		"operation_id": "op_inv_create",
+		"label":        "onboarding",
+		"requested_scopes": map[string]any{
+			"dev": "read",
+		},
+		"client": map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	createRec := httptest.NewRecorder()
+	server.ServeHTTP(createRec, signedRequest(t, admin, http.MethodPost, "/v1/teams/"+teamID+"/invites", createPayload, now, "nonce-inv-create", "op_inv_create"))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create invite status = %d, body = %s", createRec.Code, createRec.Body.String())
+	}
+	pin := envelopeStringField(t, createRec.Body.Bytes(), "pin")
+	inviteID := envelopeStringField(t, createRec.Body.Bytes(), "invite_id")
+
+	listRec := httptest.NewRecorder()
+	server.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/v1/teams/"+teamID+"/join/invites", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list join invites status = %d, body = %s", listRec.Code, listRec.Body.String())
+	}
+	if !strings.Contains(listRec.Body.String(), inviteID) {
+		t.Fatalf("joiner list missing invite id %s: %s", inviteID, listRec.Body.String())
+	}
+
+	joiner := newTestSigner(t)
+	joinerSSH := openSSHPublicKey(joiner.public, "bob@example.com")
+	pinBody := mustJSON(t, map[string]any{
+		"operation_id": "op_pin_ok",
+		"pin":          pin,
+		"handle":       "bob@example.com",
+		"joiner": map[string]any{
+			"handle":                "bob@example.com",
+			"public_key_sha":        joiner.sha,
+			"signing_public_key":    joinerSSH,
+			"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
+		},
+		"requested_role": "developers",
+		"requested_scopes": map[string]any{"dev": "read"},
+		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	pinRec := httptest.NewRecorder()
+	server.ServeHTTP(pinRec, signedRequest(t, joiner, http.MethodPost, "/v1/teams/"+teamID+"/join/invites/"+inviteID+"/pin", pinBody, now, "nonce-pin-1", "op_pin_ok"))
+	if pinRec.Code != http.StatusOK {
+		t.Fatalf("pin redeem status = %d, body = %s", pinRec.Code, pinRec.Body.String())
+	}
+	if !strings.Contains(pinRec.Body.String(), `"redemption_id": "red_`) {
+		t.Fatalf("pin redeem missing redemption id: %s", pinRec.Body.String())
+	}
+
+	emptyListRec := httptest.NewRecorder()
+	server.ServeHTTP(emptyListRec, httptest.NewRequest(http.MethodGet, "/v1/teams/"+teamID+"/join/invites", nil))
+	if emptyListRec.Code != http.StatusOK {
+		t.Fatalf("list after redeem status = %d, body = %s", emptyListRec.Code, emptyListRec.Body.String())
+	}
+	if strings.Contains(emptyListRec.Body.String(), inviteID) {
+		t.Fatalf("expected no active invites after redeem: %s", emptyListRec.Body.String())
+	}
+
+	pinAgain := mustJSON(t, map[string]any{
+		"operation_id": "op_pin_again",
+		"pin":          pin,
+		"handle":       "bob@example.com",
+		"joiner": map[string]any{
+			"handle":                "bob@example.com",
+			"public_key_sha":        joiner.sha,
+			"signing_public_key":    joinerSSH,
+			"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
+		},
+		"requested_role":   "developers",
+		"requested_scopes": map[string]any{"dev": "read"},
+		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	replayRec := httptest.NewRecorder()
+	server.ServeHTTP(replayRec, signedRequest(t, joiner, http.MethodPost, "/v1/teams/"+teamID+"/join/invites/"+inviteID+"/pin", pinAgain, now, "nonce-pin-2", "op_pin_again"))
+	if replayRec.Code != http.StatusConflict {
+		t.Fatalf("second redeem status = %d, body = %s", replayRec.Code, replayRec.Body.String())
+	}
+	if !strings.Contains(replayRec.Body.String(), `"code": "invite_not_active"`) {
+		t.Fatalf("expected invite_not_active: %s", replayRec.Body.String())
+	}
+}
+
+func TestTeamInvitesPINLocksAfterThreeFailures(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	server := NewServer(storage.NewMemoryStore(), Config{Now: func() time.Time { return now }})
+	admin := newTestSigner(t)
+	body := setupBody(t, admin, "op_setup_invites_lock", false)
+
+	setupRec := httptest.NewRecorder()
+	server.ServeHTTP(setupRec, signedSetupRequest(t, admin, body, now, "nonce-setup-lock"))
+	if setupRec.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, body = %s", setupRec.Code, setupRec.Body.String())
+	}
+	teamID := teamIDFromBody(t, setupRec.Body.Bytes())
+
+	createPayload := mustJSON(t, map[string]any{
+		"operation_id":     "op_inv_lock",
+		"label":            "lock-me",
+		"requested_scopes": map[string]any{"dev": "read"},
+		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	createRec := httptest.NewRecorder()
+	server.ServeHTTP(createRec, signedRequest(t, admin, http.MethodPost, "/v1/teams/"+teamID+"/invites", createPayload, now, "nonce-inv-lock", "op_inv_lock"))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create invite status = %d, body = %s", createRec.Code, createRec.Body.String())
+	}
+	pin := envelopeStringField(t, createRec.Body.Bytes(), "pin")
+	inviteID := envelopeStringField(t, createRec.Body.Bytes(), "invite_id")
+
+	tryWrong := func(joiner testSigner, opID, nonce string) *httptest.ResponseRecorder {
+		t.Helper()
+		ssh := openSSHPublicKey(joiner.public, "eve@example.com")
+		bad := mustJSON(t, map[string]any{
+			"operation_id": opID,
+			"pin":          "0000A",
+			"handle":       "eve@example.com",
+			"joiner": map[string]any{
+				"handle":                "eve@example.com",
+				"public_key_sha":        joiner.sha,
+				"signing_public_key":    ssh,
+				"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
+			},
+			"requested_role":   "developers",
+			"requested_scopes": map[string]any{"dev": "read"},
+			"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+		})
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, signedRequest(t, joiner, http.MethodPost, "/v1/teams/"+teamID+"/join/invites/"+inviteID+"/pin", bad, now, nonce, opID))
+		return rec
+	}
+
+	e1 := newTestSigner(t)
+	r1 := tryWrong(e1, "op_bad_1", "nonce-bad-1")
+	if r1.Code != http.StatusUnauthorized || !strings.Contains(r1.Body.String(), `"code": "invite_pin_invalid"`) {
+		t.Fatalf("first bad pin: status=%d body=%s", r1.Code, r1.Body.String())
+	}
+
+	e2 := newTestSigner(t)
+	r2 := tryWrong(e2, "op_bad_2", "nonce-bad-2")
+	if r2.Code != http.StatusUnauthorized || !strings.Contains(r2.Body.String(), `"code": "invite_pin_invalid"`) {
+		t.Fatalf("second bad pin: status=%d body=%s", r2.Code, r2.Body.String())
+	}
+
+	e3 := newTestSigner(t)
+	r3 := tryWrong(e3, "op_bad_3", "nonce-bad-3")
+	if r3.Code != http.StatusForbidden || !strings.Contains(r3.Body.String(), `"code": "invite_locked"`) {
+		t.Fatalf("third bad pin: status=%d body=%s", r3.Code, r3.Body.String())
+	}
+
+	e4 := newTestSigner(t)
+	ssh4 := openSSHPublicKey(e4.public, "frank@example.com")
+	good := mustJSON(t, map[string]any{
+		"operation_id": "op_good_late",
+		"pin":          pin,
+		"handle":       "frank@example.com",
+		"joiner": map[string]any{
+			"handle":                "frank@example.com",
+			"public_key_sha":        e4.sha,
+			"signing_public_key":    ssh4,
+			"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
+		},
+		"requested_role":   "developers",
+		"requested_scopes": map[string]any{"dev": "read"},
+		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	r4 := httptest.NewRecorder()
+	server.ServeHTTP(r4, signedRequest(t, e4, http.MethodPost, "/v1/teams/"+teamID+"/join/invites/"+inviteID+"/pin", good, now, "nonce-good-late", "op_good_late"))
+	if r4.Code != http.StatusConflict || !strings.Contains(r4.Body.String(), `"code": "invite_not_active"`) {
+		t.Fatalf("pin after lockout: status=%d body=%s", r4.Code, r4.Body.String())
+	}
+}
+
+func envelopeStringField(t *testing.T, body []byte, key string) string {
+	t.Helper()
+	var env struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := env.Data[key]
+	if !ok {
+		t.Fatalf("envelope data missing %q: %s", key, string(body))
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("decode data.%s: %v body=%s", key, err, string(body))
+	}
+	return s
+}
+
 type testSigner struct {
 	private ed25519.PrivateKey
 	public  ed25519.PublicKey

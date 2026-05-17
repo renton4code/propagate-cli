@@ -16,6 +16,9 @@ var (
 	ErrRevisionConflict    = errors.New("revision conflict")
 	ErrSecretConflict      = errors.New("secret version conflict")
 	ErrValidation          = errors.New("validation error")
+	ErrInvitePINInvalid    = errors.New("invite pin invalid")
+	ErrInviteLocked        = errors.New("invite locked after failed pin attempts")
+	ErrInviteNotActive     = errors.New("invite is not active")
 )
 
 type Store interface {
@@ -31,4 +34,9 @@ type Store interface {
 	EnvStatus(ctx context.Context, teamID string, scope string, actor domain.Member) (domain.EnvStatusData, error)
 	RecordPullEvent(ctx context.Context, teamID string, actor domain.Member, request domain.PullEventRequest) (domain.PullEventResult, error)
 	TeamStatus(ctx context.Context, teamID string, actor domain.Member) (domain.TeamStatusData, error)
+	CreateTeamInvite(ctx context.Context, teamID string, actor domain.Member, request domain.CreateTeamInviteRequest) (domain.CreateTeamInviteResult, error)
+	ListJoinerInvites(ctx context.Context, teamID string) (domain.JoinerInvitesData, error)
+	SubmitInvitePIN(ctx context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string) (domain.InvitePINResult, error)
+	ListAdminInvites(ctx context.Context, teamID string, actor domain.Member) (domain.AdminInvitesData, error)
+	RevokeTeamInvite(ctx context.Context, teamID string, inviteID string, actor domain.Member) error
 }

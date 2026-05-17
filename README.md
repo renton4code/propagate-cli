@@ -2,6 +2,13 @@
 
 Propagate is organized as a Go monorepo.
 
+## Product documentation
+
+- [propagate-prd.md](propagate-prd.md) — requirements (includes planned **PIN-backed team invites**).
+- [propagate-technical-design.md](propagate-technical-design.md) — architecture and data model.
+- [propagate-api-implementation-guide.md](propagate-api-implementation-guide.md) — HTTP contracts.
+- [propagate-cli-implementation-guide.md](propagate-cli-implementation-guide.md) — CLI command behaviors.
+
 ## Layout
 
 - `packages/backend/`: Backend API (Go, Cloud Run).

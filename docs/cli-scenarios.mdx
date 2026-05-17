@@ -39,6 +39,10 @@ Use `--agent-guidance` instead of `--skip-agent-guidance` when the human wants `
 
 ## Request Team Access
 
+**Git-mediated join:** the command adds a pending request to `propagate.yaml` for review in Git.
+
+When **PIN invite codes** exist for the team (planned), interactive `propagate team join` first asks whether to **Request to join** (git-mediated only) or **Join by invite code** (PIN flow). If there are **no** active invite codes, the CLI proceeds with the git-mediated join without that prompt. Non-interactive usage will need explicit join-mode flags once invites ship.
+
 Preview the join request:
 
 ```bash
@@ -122,25 +126,9 @@ propagate config edit
 
 Agents should not drive this editor blindly. For automation, propose the intended metadata change and let the human decide whether to run the interactive editor or make a reviewable metadata-only edit.
 
-## Pull Env Values
+## Run With Injected Env Values (Recommended)
 
-Preview file changes:
-
-```bash
-propagate env pull --scope dev --dry-run --json --non-interactive
-```
-
-After human approval for file creation, overwrites, or prod writes:
-
-```bash
-propagate env pull --scope dev --yes --non-interactive
-```
-
-Do not copy values from local env files into chat, docs, tests, fixtures, or commits.
-
-## Run With Injected Env Values
-
-Use process injection when the target command needs cloud env values but local env files should stay unchanged:
+The preferred way to use secrets locally. No `.env` files written to disk — secrets exist only in process memory:
 
 ```bash
 propagate run --scope dev -- npm run dev
@@ -157,6 +145,22 @@ propagate run --scope prod --yes -- ./bin/maintenance-task
 ```
 
 If `propagate run` reports duplicate variable names across env file mappings, use `propagate env pull` for file-based workflows or resolve the duplicate metadata before retrying.
+
+## Pull Env Values (File-Based Fallback)
+
+Use `env pull` when your tooling requires a `.env` file on disk (e.g., Docker Compose, certain frameworks):
+
+```bash
+propagate env pull --scope dev --dry-run --json --non-interactive
+```
+
+After human approval for file creation, overwrites, or prod writes:
+
+```bash
+propagate env pull --scope dev --yes --non-interactive
+```
+
+Do not copy values from local env files into chat, docs, tests, fixtures, or commits.
 
 ## Push Local Env File Changes
 

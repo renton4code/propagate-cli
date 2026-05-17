@@ -648,6 +648,102 @@ Behavior:
 - Use stored function or indexed queries for audit summaries.
 - Do not return env values, masked values, prompts, or private material.
 
+### 9.12 `POST /v1/teams/{team_id}/invites` (planned)
+
+Authentication: signed.
+
+Required permission: admin on the team.
+
+Purpose: create a labeled PIN invite. Returns the **PIN once** in the response; persist only a verifier server-side.
+
+Request data:
+
+| Field | Purpose |
+| --- | --- |
+| `operation_id` | Idempotency |
+| `label` | Admin-entered invite name shown in joiner UI |
+| `requested_role` | Optional default for pending join |
+| `requested_scopes` | Optional default scope permissions for pending join |
+| `client` | CLI metadata |
+
+Response data:
+
+| Field | Purpose |
+| --- | --- |
+| `invite_id` | Opaque id |
+| `pin` | One-time human shareable PIN (`ddddL` pattern per PRD) |
+| `expires_at` | Optional TTL |
+
+Failure cases:
+
+- Non-admin actor.
+- Too many active invites for team (optional policy).
+- Invalid label (length, charset).
+
+### 9.13 `GET /v1/teams/{team_id}/join/invites` (planned)
+
+Authentication: not required; **strict rate limits** at edge and application layers.
+
+Purpose: let a joiner discover **active** invites before they are team members. `team_id` is treated as an opaque capability leaked only to people who can read `propagate.yaml`.
+
+Response data:
+
+| Field | Purpose |
+| --- | --- |
+| `invites` | Array of `{ invite_id, label, created_at }` for `active` invites only |
+
+Behavior:
+
+- Do not return PINs, verifiers, or internal attempt counters.
+- Hide teams that do not exist or apply the same generic error as other public lookups to avoid team-ID oracle behavior where desired.
+
+### 9.14 `POST /v1/teams/{team_id}/join/invites/{invite_id}/pin` (planned)
+
+Authentication: signed by a valid Propagate identity that is **not** required to be a team member yet. Replay protection applies.
+
+Purpose: verify the PIN and record redemption for the calling public key.
+
+Request data:
+
+| Field | Purpose |
+| --- | --- |
+| `operation_id` | Idempotency |
+| `pin` | Candidate PIN |
+| `handle` | Joiner handle to echo into pending join metadata |
+| `requested_role` | Optional override |
+| `requested_scopes` | Optional override |
+| `client` | CLI metadata |
+
+Behavior:
+
+- Compare PIN to stored verifier using constant-time comparison.
+- Increment `failed_pin_attempts` on mismatch; on **third** failed attempt in the invite's lifetime, transition invite to terminal `invalidated_pin` (or delete) and return a stable error.
+- On success, mark `redeemed` and bind `redeemed_by_key_sha` once; duplicate redemption attempts fail.
+
+Response data:
+
+| Field | Purpose |
+| --- | --- |
+| `redemption_id` | Optional server-issued proof the CLI can cite in `propagate.yaml` |
+| `invite_id` | Echo |
+| `server_time` | Timestamp |
+
+### 9.15 `GET /v1/teams/{team_id}/invites` (planned)
+
+Authentication: signed.
+
+Required permission: admin.
+
+Purpose: list invites including **non-active** rows for operational visibility (without PINs).
+
+### 9.16 `POST /v1/teams/{team_id}/invites/{invite_id}/revoke` (planned)
+
+Authentication: signed.
+
+Required permission: admin.
+
+Purpose: invalidate an invite before redemption or after policy.
+
 ## 10. Stored Function Contracts
 
 The API should call stored functions for data-local transactions.
@@ -663,6 +759,9 @@ The API should call stored functions for data-local transactions.
 | Apply env push | Env push and env set handlers | Transactional encrypted upserts/tombstones, including single-value updates |
 | Record pull event | Pull event handler | Append audit event |
 | Fetch team status | Team status handler | Membership and audit summaries |
+| Create PIN invite | Team invite handler | Insert verifier, audit `invite_created` |
+| Redeem PIN invite | Join handler | Atomic PIN check, attempt counter, redemption, audit |
+| Revoke PIN invite | Team invite handler | Status flip and audit |
 
 Stored function requirements:
 

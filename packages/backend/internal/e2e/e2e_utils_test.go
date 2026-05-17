@@ -90,7 +90,26 @@ func (h *e2eHarness) newActor(handle string) testActor {
 
 func (h *e2eHarness) join(repo string, actor testActor, scopes ...string) testActor {
 	h.t.Helper()
-	args := []string{"team", "join", "--json", "--handle", actor.Handle, "--non-interactive"}
+	args := []string{"team", "join", "--json", "--handle", actor.Handle, "--non-interactive", "--join-mode", "request"}
+	for _, scope := range scopes {
+		args = append(args, "--scope", scope)
+	}
+	result := h.run(repo, actor, "", args...)
+	var out teamJoinResult
+	decodeJSON(h.t, result.Stdout, &out)
+	if out.Identity.PublicKeySHA == "" {
+		h.t.Fatalf("team join did not return public key sha:\n%s", result.Stdout)
+	}
+	actor.PublicKeySHA = out.Identity.PublicKeySHA
+	return actor
+}
+
+func (h *e2eHarness) joinByInvite(repo string, actor testActor, inviteID, pin string, scopes ...string) testActor {
+	h.t.Helper()
+	args := []string{
+		"team", "join", "--json", "--handle", actor.Handle, "--non-interactive",
+		"--join-mode", "invite", "--invite-id", inviteID, "--pin", pin,
+	}
 	for _, scope := range scopes {
 		args = append(args, "--scope", scope)
 	}
@@ -168,6 +187,13 @@ func (h *e2eHarness) runRaw(repo string, actor testActor, stdin string, args ...
 type initResult struct {
 	BackendStatus          string `json:"backend_status"`
 	VariablesUploadedCount int    `json:"variables_uploaded_count"`
+}
+
+type teamInviteCreateJSON struct {
+	OK       bool   `json:"ok"`
+	InviteID string `json:"invite_id"`
+	PIN      string `json:"pin"`
+	Label    string `json:"label"`
 }
 
 type configStatusResult struct {
