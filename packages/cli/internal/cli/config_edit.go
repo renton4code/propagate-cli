@@ -658,8 +658,18 @@ func cloneParsedProjectForConfigEdit(project config.ParsedProject) config.Parsed
 		copied.DefaultRoleAccess = copyConfigEditStringMap(scope.DefaultRoleAccess)
 		out.Scopes[idx] = copied
 	}
-	out.Members = append([]config.Member(nil), project.Members...)
-	out.PendingJoins = append([]config.JoinRequest(nil), project.PendingJoins...)
+	out.Members = make([]config.Member, len(project.Members))
+	for idx, member := range project.Members {
+		copied := member
+		copied.Scopes = copyConfigEditStringMap(member.Scopes)
+		out.Members[idx] = copied
+	}
+	out.PendingJoins = make([]config.JoinRequest, len(project.PendingJoins))
+	for idx, join := range project.PendingJoins {
+		copied := join
+		copied.RequestedScopes = copyConfigEditStringMap(join.RequestedScopes)
+		out.PendingJoins[idx] = copied
+	}
 	out.AccessChangesRaw = append([]string(nil), project.AccessChangesRaw...)
 	out.ActiveMemberSHAs = copyConfigEditBoolMap(project.ActiveMemberSHAs)
 	out.PendingJoinSHAs = copyConfigEditBoolMap(project.PendingJoinSHAs)

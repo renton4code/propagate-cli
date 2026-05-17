@@ -27,7 +27,7 @@ Key principles:
 - `propagate.yaml` is safe to commit because sensitive values are represented only by scope-keyed, algorithm-prefixed digests such as `hmac-sha-256:v1:...`. Explicitly non-sensitive short values may be stored as literals; longer non-sensitive values are stored as previews such as `aaa...zzz`.
 - Cloud state is authoritative for encrypted secrets and audit history.
 - Git state is authoritative for human-reviewed team membership proposals.
-- Admin approval requires an admin client because only clients can encrypt scope keys for newly approved members.
+- Management approval requires an approving client because only clients can encrypt scope keys for newly approved members.
 - The CLI should fail closed: if permissions, revisions, or encryption state are ambiguous, it should not write secrets.
 - TUI screens should make risky operations explicit, especially imports, prod pulls, env overwrites, and access approvals.
 
@@ -142,7 +142,7 @@ Each local identity contains:
 | Signing private key | Signs API requests and config decisions |
 | Signing public key | Primary public identity key |
 | Encryption private key | Decrypts scope key envelopes |
-| Encryption public key | Recipient key used by admins when granting access |
+| Encryption public key | Recipient key used when granting access |
 | Public key SHA | Stable identifier derived from the canonical signing public key |
 | Handle | Human-readable display metadata |
 | Created timestamp | Local diagnostics and audit context |
@@ -160,7 +160,7 @@ Local private key protection should support two modes:
 - MVP baseline: owner-only file permissions, clear warnings on weak permissions, no cloud backup.
 - Recommended secure mode: encrypt the local identity file using an OS keychain-protected secret where available, with passphrase fallback for unsupported environments.
 
-If a user loses their private key, the cloud cannot recover their access. The user must create a new identity, submit a new join request, and have an admin approve new access envelopes.
+If a user loses their private key, the cloud cannot recover their access. The user must create a new identity, submit a new join request, and have a management member approve new access envelopes.
 
 ## 7. Cryptography And Secret Storage
 
@@ -174,7 +174,7 @@ Each team scope has a random symmetric scope key. Environment variable values fo
 | --- | --- | --- | --- | --- |
 | User signing key | User CLI | Private key only | Public key only | User creates a new identity |
 | User encryption key | User CLI | Private key only | Public key only | User creates a new identity |
-| Scope key | Admin or first setup CLI | Plaintext only in memory during operations | Only encrypted envelopes | Rotate when revoking access or after incidents |
+| Scope key | Management member or first setup CLI | Plaintext only in memory during operations | Only encrypted envelopes | Rotate when revoking access or after incidents |
 | Secret value nonce | CLI during encryption | No long-term local storage | Stored with ciphertext | New nonce per value version |
 
 ### 7.2 Env Value Encryption
@@ -194,8 +194,8 @@ Variable names and env file paths are treated as metadata. They are visible to t
 
 When a member is granted read access:
 
-- An admin client obtains or decrypts the current scope key.
-- The admin client encrypts that scope key to the member's encryption public key.
+- A management client obtains or decrypts the current scope key.
+- The management client encrypts that scope key to the member's encryption public key.
 - The encrypted envelope is uploaded to the cloud.
 - The member can later download the envelope and decrypt it locally with their encryption private key.
 
@@ -203,7 +203,7 @@ When a member is revoked:
 
 - Their existing envelope is marked revoked and no longer returned by the API.
 - Existing secret versions that the user already pulled cannot be clawed back.
-- For meaningful revocation, an admin should rotate the scope key and re-encrypt current env values for remaining authorized members.
+- For meaningful revocation, a management member should rotate the scope key and re-encrypt current env values for remaining authorized members.
 - MVP should support revocation metadata and warnings; automated rotation can be a follow-up if it is too large for the first release.
 
 ### 7.4 Request Signing
@@ -232,9 +232,9 @@ Recommended endpoints by responsibility:
 
 | API Area | Responsibilities |
 | --- | --- |
-| Identity lookup | Resolve current public key SHA, verify team membership, return role and accessible scopes |
-| Team setup | Create team, first admin, scopes, initial config revision, initial encrypted secrets and envelopes |
-| Config sync | Fetch config snapshot, compare revisions, push admin-approved config decisions |
+| Identity lookup | Resolve current public key SHA, verify team membership, return management bit and accessible scopes |
+| Team setup | Create team, first management member, scopes, initial config revision, initial encrypted secrets and envelopes |
+| Config sync | Fetch config snapshot, compare revisions, push management-approved config decisions |
 | Secret read | Return encrypted scope key envelope and encrypted secret versions for an authorized member |
 | Secret write | Accept encrypted secret upserts/deletions from authorized writers, including single-value updates from `env set` |
 | Audit | Record pull, push, config, access, and error-relevant events |
@@ -250,7 +250,7 @@ The Cloud Run API should be a single Go service for the MVP.
 | HTTP layer | Route product endpoints, decode requests, encode responses, enforce API version headers |
 | Signature middleware | Canonicalize requests, verify Ed25519 signatures, validate timestamps and body digests |
 | Replay middleware | Reserve request nonces through Postgres and reject duplicate signed requests |
-| Auth context layer | Resolve team, actor, role, scope, and effective permissions |
+| Auth context layer | Resolve team, actor, management bit, scope, and effective permissions |
 | Handler layer | Implement team setup, config sync, secret read, secret write, and audit workflows |
 | Database layer | Call stored functions and map database errors to stable API errors |
 | Observability layer | Structured logs, safe metrics, request IDs, operation IDs, and error categories |
@@ -286,7 +286,7 @@ Stores top-level team metadata.
 | id | Stable team identifier |
 | name | Display name |
 | current_config_revision | Latest accepted config revision |
-| created_by_key_sha | First admin identity |
+| created_by_key_sha | First management identity |
 | created_at | Creation timestamp |
 | updated_at | Last metadata update |
 | archived_at | Soft-delete marker for future use |
@@ -308,7 +308,7 @@ Stores canonical cloud revisions of the Git-backed config.
 | revision_number | Monotonic team-local revision |
 | config_hash | Hash of normalized config metadata and safe variable declarations |
 | config_snapshot | Normalized config metadata, env file mappings, and safe variable declarations |
-| pushed_by_key_sha | Admin who pushed the revision |
+| pushed_by_key_sha | Management member who pushed the revision |
 | pushed_at | Push timestamp |
 | operation_id | Idempotency key |
 
@@ -332,11 +332,12 @@ Stores active and historical member identities.
 | public_key_sha | Stable identity identifier |
 | signing_public_key | Public signing key |
 | encryption_public_key | Public encryption recipient |
-| role | Admin or developer for MVP |
+| role | Legacy compatibility label, if present |
+| management | Whether the member can approve joins, manage invites, and push config |
 | status | Active, revoked, or replaced |
-| approved_by_key_sha | Admin who approved the member |
+| approved_by_key_sha | Management member who approved the member |
 | approved_at | Approval timestamp |
-| revoked_by_key_sha | Admin who revoked the member |
+| revoked_by_key_sha | Management member who revoked the member |
 | revoked_at | Revocation timestamp |
 
 Important constraints:
@@ -383,24 +384,24 @@ Important constraints:
 
 ### 9.6 scope_access_rules
 
-Stores role-level and member-level access.
+Stores per-member scope access. Legacy role-level rules may be read for old snapshots, but new config writes member grants.
 
 | Column | Purpose |
 | --- | --- |
 | id | Rule record ID |
 | team_id | Parent team |
 | scope_id | Scope the rule applies to |
-| subject_type | Role or member |
-| subject_value | Role name or member public key SHA |
+| subject_type | Member, with old access-rule rows supported for migration |
+| subject_value | Member public key SHA or old access-rule subject |
 | permission | None, read, write, or admin |
 | config_revision | Revision where this rule was accepted |
 | active | Whether the rule is current |
 
 Important constraints:
 
-- Member-specific rules override role rules.
+- Member-specific rules are authoritative for new config.
 - Write implies read.
-- Admin implies write unless later policy introduces restrictions.
+- Management is separate from scope access; it does not imply read or write unless a scope grant exists.
 
 ### 9.7 scope_key_envelopes
 
@@ -415,7 +416,7 @@ Stores encrypted scope keys for authorized members.
 | scope_key_version | Scope key version |
 | encrypted_scope_key | Ciphertext encrypted to recipient |
 | algorithm | Envelope encryption algorithm |
-| created_by_key_sha | Admin client that created the envelope |
+| created_by_key_sha | Management client that created the envelope |
 | config_revision | Config revision that granted access |
 | created_at | Creation timestamp |
 | revoked_at | Revocation timestamp |
@@ -472,24 +473,24 @@ Important constraints:
 
 ### 9.10 team_pin_invites
 
-Stores **admin-created PIN invites** used to bind a pending Git-mediated join to an expected person (planned feature; see PRD §6.2.1). The database must never store plaintext PINs.
+Stores **management-created PIN invites** used to bind a pending Git-mediated join to an expected person. The database must never store plaintext PINs.
 
 | Column | Purpose |
 | --- | --- |
 | id | Opaque invite identifier returned to joiners after listing |
 | team_id | Parent team |
-| label | Admin-entered display name for selection in `propagate team join` |
+| label | Management-entered display name for selection in `propagate team join` |
 | pin_verifier | Slow hash or other verification material for the PIN; never reversible to plaintext |
 | status | `active`, `redeemed`, `revoked`, `invalidated_pin` (or equivalent terminal states) |
 | failed_pin_attempts | Count of rejected PIN submissions (implementation caps behavior before lockout) |
-| requested_role | Optional default role copied into pending join |
+| requested_management | Optional management request copied into pending join |
 | requested_scopes | Optional default scope access copied into pending join |
-| created_by_key_sha | Admin who created the invite |
+| created_by_key_sha | Management member who created the invite |
 | created_at | Creation timestamp |
 | redeemed_at | When PIN was verified successfully |
 | redeemed_by_key_sha | Joiner identity after successful PIN verification |
 | expires_at | Optional TTL |
-| revoked_at | When admin revoked or system invalidated |
+| revoked_at | When a management member revoked or system invalidated |
 
 Important constraints:
 
@@ -544,11 +545,10 @@ Evaluation order:
 
 1. Verify request signature and replay protection.
 2. Load active team member by public key SHA.
-3. Determine member role.
+3. Determine member management bit.
 4. Determine requested scope.
 5. Apply member-specific scope rule if present.
-6. Otherwise apply role-level scope rule.
-7. Enforce command-specific permission.
+6. Enforce command-specific permission.
 
 Permission behavior:
 
@@ -557,7 +557,7 @@ Permission behavior:
 | None | No secret read or write |
 | Read | Pull env values and view env status |
 | Write | Read plus push env changes and set individual env values |
-| Admin | Manage config, approve joins, approve access changes, and write all scopes unless future policy restricts it |
+| Management bit | Manage config, approve joins, approve access changes, and manage invites |
 
 The client should also perform local permission checks for early, friendly errors. The server remains authoritative.
 
@@ -593,7 +593,7 @@ Stored functions should not expose raw tables directly to the CLI. The Go API sh
 | Request canonicalization | Go Cloud Run API | It is protocol logic and should be easy to version with the API |
 | Signature verification | Go Cloud Run API | Ed25519 verification and timestamp checks are easier to implement safely in Go and can share request-signing fixtures with the CLI |
 | Encryption and decryption | CLI | The database must never see sensitive plaintext env values or plaintext scope keys |
-| Scope key envelope creation | CLI | Admin clients encrypt scope keys for recipients in the end-to-end encryption model |
+| Scope key envelope creation | CLI | Management clients encrypt scope keys for recipients in the end-to-end encryption model |
 | YAML parsing and validation | CLI, with server-side metadata validation | Git config is local file state; server should only validate normalized metadata snapshots |
 | Env file parsing and merging | CLI | This depends on local filesystem state and user confirmation |
 | TUI approval decisions | CLI | Human interaction belongs in the Bubble Tea client |
@@ -608,9 +608,9 @@ Recommended functions:
 | Function Area | Responsibility |
 | --- | --- |
 | Reserve request nonce | Insert a nonce for a signer and reject duplicates atomically |
-| Resolve member access | Return active member, role, scope, and effective permission for a requested operation |
-| Create team | Create team, first admin, scopes, initial config revision, encrypted secret records, first envelopes, and audit events |
-| Push config revision | Apply admin-approved config decisions with expected revision checks and idempotency |
+| Resolve member access | Return active member, management bit, scope, and effective permission for a requested operation |
+| Create team | Create team, first management member, scopes, initial config revision, encrypted secret records, first envelopes, and audit events |
+| Push config revision | Apply management-approved config decisions with expected revision checks and idempotency |
 | Fetch config snapshot | Return the current normalized config metadata and revision |
 | Fetch env pull bundle | Return encrypted values, active envelope, env file mappings, and safe metadata for an authorized reader |
 | Apply env push | Apply encrypted upserts and tombstones with expected version checks and idempotency |
@@ -653,11 +653,11 @@ Config push and env push should be single database transactions. `env set` uses 
 
 Config push transaction requirements:
 
-- Verify the actor is an active admin.
+- Verify the actor has management access.
 - Verify expected cloud config revision.
 - Enforce idempotency through the operation ID.
 - Apply approved member and access changes.
-- Insert encrypted scope key envelopes supplied by the admin client.
+- Insert encrypted scope key envelopes supplied by the management client.
 - Insert a new config revision snapshot with safe variable declarations.
 - Update the team current revision.
 - Append audit events.
@@ -683,7 +683,7 @@ Security rules:
 
 - The CLI should never call stored functions directly.
 - The Go API should verify request signatures before invoking stored functions.
-- Stored functions should derive roles and permissions from database state, not from client-provided claims.
+- Stored functions should derive management and permissions from database state, not from client-provided claims.
 - Functions that need elevated privileges should use tightly scoped execution privileges and a fixed search path.
 - Function inputs should use team IDs, public key SHAs, scope IDs, operation IDs, ciphertext, envelopes, and metadata only.
 - Function inputs and outputs must never contain sensitive plaintext env values or plaintext scope keys.
@@ -695,7 +695,7 @@ Security rules:
 
 Config edits to variable declarations are local metadata changes. The CLI may change a declaration's sensitivity, move it between scopes, add an env file mapping needed by that move, or remove the declaration, but it must not read env file values, decrypt cloud values, or mutate encrypted secret versions during config edit.
 
-Scope creation is also a local metadata change. `propagate scope create` may add an empty scope with optional env file mappings and default role access, but it must not read local env values, generate encrypted secret versions, decrypt cloud values, or publish the scope directly. Publication happens through `propagate config push`.
+Scope creation is also a local metadata change. `propagate scope create` may add an empty scope with optional env file mappings and grant write access to existing management members, but it must not read local env values, generate encrypted secret versions, decrypt cloud values, or publish the scope directly. Publication happens through `propagate config push`.
 
 Logical sections:
 
@@ -703,9 +703,9 @@ Logical sections:
 | --- | --- |
 | Version | Config format version |
 | Team | Team ID, name, cloud revision |
-| Scopes | Scope names, env file mappings, variable declarations, default role access |
-| Members | Active members, handles, public key SHA, public keys, roles |
-| Pending | Join requests, role changes, scope access changes |
+| Scopes | Scope names, env file mappings, variable declarations |
+| Members | Active members, handles, public key SHA, public keys, management bit, per-scope permissions |
+| Pending | Join requests, management changes, scope access changes |
 | History | Optional local history of declined or resolved requests, without env values |
 
 Config validation should check:
@@ -721,13 +721,13 @@ Config validation should check:
 - Scope names are valid and unique.
 - Env file paths are relative and inside the Git worktree.
 - Pending requests do not duplicate active members.
-- Role and permission values are known.
+- Management and permission values are known.
 
 Config writes should preserve comments and ordering where possible. If round-trip preservation is not reliable, the CLI should generate a stable normalized file and clearly report that it updated formatting.
 
 ## 13. Core User Flows
 
-### 13.1 First Admin Setup
+### 13.1 First Management Member Setup
 
 1. User runs `propagate init`.
 2. CLI creates or loads local identity.
@@ -738,10 +738,10 @@ Config writes should preserve comments and ordering where possible. If round-tri
 7. CLI scans candidate env files inside the Git worktree.
 8. Bubble Tea import UI shows files, variable names, masked values, detected source, and proposed scopes.
 9. User selects scopes and confirms import.
-10. CLI creates team metadata, first admin member, scopes, and env mappings.
+10. CLI creates team metadata, first management member, scopes, and env mappings.
 11. CLI creates scope keys for selected scopes.
 12. CLI encrypts selected env values locally.
-13. CLI creates first admin scope key envelopes.
+13. CLI creates first management member scope key envelopes.
 14. CLI sends a signed setup request to the cloud API.
 15. Go API calls stored functions that create the team transactionally and record audit events.
 16. CLI writes `propagate.yaml` with the returned team ID, cloud revision, env file mappings, and safe variable declarations.
@@ -757,13 +757,13 @@ Failure handling:
 - If env import is canceled, no cloud team should be created.
 - If agent guidance writing fails, project setup should remain successful and the CLI should report how to retry the guidance step later.
 
-### 13.1.1 Admin PIN invite (planned)
+### 13.1.1 Management PIN Invite
 
-1. Admin runs `propagate team invite` with label and optional default role/scopes.
+1. A management member runs `propagate team invite` with label and optional default management/scopes.
 2. CLI sends signed `create_invite` request; API generates random PIN, stores verifier only, returns PIN once in the response body.
 3. CLI prints PIN exactly once. Documentation should warn about shell history and screen shoulder-surfing.
-4. Admin communicates PIN out of band.
-5. Admin can list or revoke invites before redemption using `propagate team invite list` or `revoke`.
+4. The management member communicates PIN out of band.
+5. Management members can list or revoke invites before redemption using `propagate team invite list` or `revoke`.
 
 ### 13.2 Developer Join
 
@@ -772,29 +772,29 @@ Failure handling:
 3. When `--init` is present, CLI runs the existing-project init path first: create or load identity, verify `propagate.yaml` exists, and offer or apply agent guidance. It must not create a new project config in the join path.
 4. CLI reads `propagate.yaml` for validation and `team_id`.
 5. CLI queries the cloud for **active invite codes** for the team. **If none**, proceed directly to the git-mediated pending join (add pending request, write `propagate.yaml`). **If one or more exist**, the Bubble Tea UI offers **Request to join** (git-mediated pending join only) or **Join by invite code** (PIN subflow: list invites, optional row selection when multiple, signed PIN verification with lockout semantics, then pending join with optional invite metadata).
-6. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested role, requested scopes, timestamp, and optional invite correlation fields when the user redeemed an invite code.
+6. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested management bit, requested scopes, timestamp, and optional invite correlation fields when the user redeemed an invite code.
 7. CLI writes `propagate.yaml`.
 8. CLI explains that no secret access has been granted.
 9. Developer commits the config diff and opens a pull request.
 
-For **git-mediated** join requests, the cloud does not need to know about the pending row until an admin pushes the approved config. **Invite-code redemption** still produces git-mediated pending entries in `propagate.yaml`; the cloud additionally tracks invite state so duplicate redemptions cannot occur. This keeps access requests reviewable in Git.
+For **git-mediated** join requests, the cloud does not need to know about the pending row until a management member pushes the approved config. **Invite-code redemption** still produces git-mediated pending entries in `propagate.yaml`; the cloud additionally tracks invite state so duplicate redemptions cannot occur. This keeps access requests reviewable in Git.
 
-### 13.3 Admin Config Push
+### 13.3 Management Config Push
 
-1. Admin pulls the latest Git branch containing pending config changes.
-2. Admin runs `propagate config push`.
+1. A management member pulls the latest Git branch containing pending config changes.
+2. The management member runs `propagate config push`.
 3. CLI loads local identity and `propagate.yaml`.
 4. CLI fetches cloud config revision.
 5. CLI compares local revision and cloud revision.
-6. If revisions conflict, CLI refuses to push until the admin pulls or resolves the conflict.
+6. If revisions conflict, CLI refuses to push until the management member pulls or resolves the conflict.
 7. Bubble Tea approval UI shows each pending join and access change.
-8. Admin approves, declines, or skips each item.
+8. The management member approves, declines, or skips each item.
 9. For approvals, CLI prepares updated config metadata.
 10. For approved scope access, CLI decrypts the relevant scope key and encrypts a new envelope for the target member.
 11. If the target config contains scopes that do not exist in the current cloud config, CLI generates a fresh random scope key for each new scope.
-12. For each new scope, CLI encrypts the new scope key for every active member who has read access under the target config's default role access.
+12. For each new scope, CLI encrypts the new scope key for every active member whose per-member scope map grants read or write access.
 13. CLI sends a signed config push with expected cloud revision, decisions, updated config snapshot, and new envelopes.
-14. Go API validates admin permission and applies the transaction through stored functions.
+14. Go API validates management permission and applies the transaction through stored functions.
 15. CLI updates `propagate.yaml` to reflect approved and declined decisions while leaving skipped items pending.
 16. CLI prints a decision summary and whether the config file changed.
 
@@ -825,7 +825,7 @@ Flow:
 3. CLI loads `propagate.yaml` and validates the requested scope name.
 4. CLI rejects duplicate scope names.
 5. CLI validates optional env file mappings as repository-relative paths inside the worktree.
-6. CLI adds a new scope with empty variables, optional env file mappings, and default role access.
+6. CLI adds a new scope with empty variables, optional env file mappings, and write grants for current management members.
 7. CLI validates the edited config.
 8. With `--dry-run`, CLI prints the safe summary and does not write.
 9. Without `--dry-run`, CLI writes `propagate.yaml` atomically.
@@ -965,9 +965,9 @@ The command should report:
 `propagate team status` should combine local config and cloud audit summaries:
 
 - Team name.
-- Current identity and role.
+- Current identity, management bit, and scope permissions.
 - Current public key SHA.
-- Members grouped by role.
+- Members grouped by management vs non-management access.
 - Pending joins and access changes from local config.
 - Last pull per member and scope from cloud events.
 - Members with no recorded pulls.
@@ -1120,7 +1120,7 @@ Command contract requirements:
 | Human output | Non-JSON output should use the shared Propagate style: bold command title, semantic status marker, consistent list sections, and `--no-color` support |
 | Output safety | stdout, stderr, JSON, logs, and panic paths must never contain plaintext env values |
 | Operation IDs | Mutating commands should return operation IDs in JSON so agents can report and retry safely |
-| Next steps | Errors should include safe remediation, such as requesting access or asking an admin to approve a pending join |
+| Next steps | Errors should include safe remediation, such as requesting access or asking a management member to approve a pending join |
 
 For `propagate run`, output safety applies to Propagate-owned output only. The child process receives plaintext values by design, so its stdout and stderr are outside Propagate's ability to sanitize.
 
@@ -1168,7 +1168,7 @@ Propagate has two important revision systems:
 - Config revision: monotonic team-level revision for `propagate.yaml` cloud sync.
 - Secret version: immutable per-variable version for encrypted env values.
 
-Config push must include the expected cloud config revision. If the cloud revision has changed, the server rejects the push. The CLI then instructs the admin to run `propagate config pull`, review the diff, and retry.
+Config push must include the expected cloud config revision. If the cloud revision has changed, the server rejects the push. The CLI then instructs the management member to run `propagate config pull`, review the diff, and retry.
 
 Env push should include expected current secret version IDs for changed or removed variables. If another user updated the same variable first, the server rejects only the conflicting variables where possible. The CLI should show a conflict summary and ask the user to pull before retrying.
 
@@ -1225,7 +1225,7 @@ This threat model should be stated in user-facing security documentation.
 
 ### 19.3 Server-Side Authorization
 
-Server authorization must not rely on client-provided role claims. The server derives roles and permissions from the database.
+Server authorization must not rely on client-provided access claims. The server derives management access and scope permissions from the database.
 
 Every API handler should verify:
 
@@ -1236,21 +1236,21 @@ Every API handler should verify:
 - Required permission for the specific scope and operation.
 - Expected revision or version preconditions for writes.
 
-### 19.4 Admin Approval Safety
+### 19.4 Management Approval Safety
 
-Admin approval is security-critical.
+Management approval is security-critical.
 
 The Config Push TUI should show:
 
 - Full handle.
 - Public key SHA.
-- Requested role.
+- Requested management access.
 - Requested scopes.
 - Whether the same key or handle already exists.
 - Whether the request came from local config changes not yet committed.
 - Whether the request includes **PIN invite** metadata (`source_invite_id` / label) when present.
 
-The CLI should encourage admins to review the Git diff before approving. It should not auto-approve pending joins.
+The CLI should encourage management members to review the Git diff before approving. It should not auto-approve pending joins.
 
 ### 19.5 Revocation Limits
 
@@ -1275,7 +1275,7 @@ Guardrails:
 - Clear display of identity and target file path.
 - Refuse non-interactive prod writes unless an explicit flag or config setting is present.
 - Refuse non-interactive prod process injection unless `--yes` is present.
-- Prefer admin-only write access by default.
+- Prefer management-only write access by default.
 
 ## 20. Edge Cases And Expected Behavior
 
@@ -1304,14 +1304,14 @@ Guardrails:
 | Interrupted write | Atomic writes should leave either old or new file, not a partial file |
 | Clock skew | Server allows small skew window and returns a clear clock error if exceeded |
 | Replay attempt | Server rejects reused nonce and records security-relevant audit metadata |
-| Admin cannot decrypt scope key | Config approval for that scope fails; admin must pull access or recover key |
+| Approver cannot decrypt scope key | Config approval for that scope fails; the approver must pull access or recover key |
 | Supabase transaction partially fails | Transaction rolls back; CLI retry uses same operation ID |
 | Agent instruction file has malformed managed block | CLI refuses automatic update and offers a repair or manual instructions |
 | Multiple agent systems detected | CLI lets the user choose targets and reports each created, updated, skipped, or failed target |
 | Non-interactive agent invokes mutating command without approval | CLI fails with a stable exit code and suggests dry-run or explicit human-approved mode |
-| PIN invite: third failed PIN attempt (planned) | Server marks invite invalid; CLI tells joiner to contact admin for a new invite |
+| PIN invite: third failed PIN attempt (planned) | Server marks invite invalid; CLI tells joiner to contact a management member for a new invite |
 | PIN invite: redeem after invite expired or revoked (planned) | Server rejects; CLI explains invite is no longer valid |
-| PIN invite: list empty but admin said PIN was issued (planned) | Often means lockout, redemption, expiry, or wrong `team_id`; CLI points to status commands for admins |
+| PIN invite: list empty but management member said PIN was issued (planned) | Often means lockout, redemption, expiry, or wrong `team_id`; CLI points to status commands for management members |
 | `team join` with active invites but `--non-interactive` and no join-mode flag (planned) | CLI fails with stable error; user must pick **Request to join** or **Join by invite code** in interactive mode or pass explicit flags |
 | Agent guidance write fails | Propagate project setup remains valid; CLI reports the failed target and retry path |
 
@@ -1359,16 +1359,16 @@ Recommended coverage:
 
 | Test Area | What To Verify |
 | --- | --- |
-| Config validation | Invalid roles, invalid keys, duplicate scopes, unsafe paths, env value fields, value-like literals |
+| Config validation | Invalid management grants, invalid permissions, invalid keys, duplicate scopes, unsafe paths, env value fields, value-like literals |
 | Identity | Key creation, permission checks, corrupted files, public key SHA stability |
 | Crypto | Round-trip encryption, wrong recipient failure, associated data mismatch failure, nonce uniqueness |
 | Env parsing | Quoting, comments, empty values, duplicate names, preserve unrelated values |
 | TUI decisions | Approval, decline, skip, config edit metadata changes, cancel, selection state, masked values |
-| API authorization | Read/write/admin permissions, revoked members, replay rejection, revision preconditions |
+| API authorization | Scope read/write permissions, management-only actions, revoked members, replay rejection, revision preconditions |
 | Supabase transactions | Config push atomicity, env push conflicts, env set partial updates, idempotent retries |
 | Agent guidance | Target detection, managed block replacement, idempotent reruns, malformed marker handling, no env value leakage |
 | Agent command contracts | JSON schema stability, exit codes, non-interactive failure, dry-run summaries |
-| End-to-end flows | First setup, join request, admin approval, env pull, process injection, env push, env set, revoke access |
+| End-to-end flows | First setup, join request, management approval, env pull, process injection, env push, env set, revoke access |
 
 Security-specific tests should assert that sensitive plaintext env values never appear in logs, command output, audit rows, config snapshots, `propagate.yaml`, or API error bodies. Public-looking and placeholder values are sensitive by default unless explicitly marked `non_sensitive`; sentinel fixtures should cover both default-sensitive and explicit non-sensitive cases.
 
@@ -1484,9 +1484,9 @@ The PRD leaves several decisions open. Recommended MVP answers:
 | Infrastructure management | Use Terraform for infrastructure and SQL migrations for database schema/stored functions |
 | Require Git repository | Yes for MVP, because access review depends on Git workflow |
 | SSH key or dedicated key format | Use a dedicated Propagate identity bundle with Ed25519 signing and X25519 or age encryption keys; display it as one identity |
-| First admin | The user who successfully creates the team during `propagate init` becomes first admin |
+| First management member | The user who successfully creates the team during `propagate init` gets management access |
 | Scope key granularity | One key per scope for MVP; reconsider per env file if teams need finer isolation |
-| Developer write access | Developers can read `dev` by default; write access should be explicit or admin-configured |
+| Initial scope access | New members request explicit per-scope access; write access should be explicit or management-configured |
 | Pull overwrite behavior | Prompt before overwriting existing differing values; non-interactive mode preserves unless explicitly told to overwrite |
 | Removed variables during pull | Preserve locally by default and warn; deletion requires explicit confirmation |
 | Revocation rotation | Record revocation in MVP; add guided or automated scope key rotation as soon as practical |

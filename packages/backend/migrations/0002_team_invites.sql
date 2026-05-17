@@ -8,6 +8,7 @@ create table if not exists team_invites (
   status text not null,
   failed_pin_attempts integer not null default 0,
   requested_role text,
+  requested_management boolean not null default false,
   requested_scopes jsonb,
   created_by_key_sha text not null,
   created_at timestamptz not null default now(),

@@ -251,7 +251,7 @@ func runEnvSet(opts envSetOptions, variable string, streams Streams) (EnvSetResu
 		bundle.ScopeKeyEnvelope.ScopeKeyVersion,
 	)
 	if err != nil {
-		return EnvSetResult{}, commandError(ExitPermissionDenied, "scope_key_decrypt_failed", fmt.Sprintf("Cannot decrypt the scope key envelope for scope %q", scopeName), err, "No value was uploaded.", "Ask a Propagate admin to refresh your access envelope.")
+		return EnvSetResult{}, commandError(ExitPermissionDenied, "scope_key_decrypt_failed", fmt.Sprintf("Cannot decrypt the scope key envelope for scope %q", scopeName), err, "No value was uploaded.", "Ask a Propagate management member to refresh your access envelope.")
 	}
 
 	existing, ambiguous, err := findCloudVariable(project.TeamID, scopeName, scopeKey, bundle.SecretVersions, variable)

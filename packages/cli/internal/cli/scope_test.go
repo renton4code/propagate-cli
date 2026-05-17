@@ -69,8 +69,8 @@ func TestScopeCreateAddsEmptyScope(t *testing.T) {
 	if len(scope.EnvFiles) != 1 || scope.EnvFiles[0] != ".env.staging" {
 		t.Fatalf("staging env files = %+v", scope.EnvFiles)
 	}
-	if scope.DefaultRoleAccess["developers"] != "read" || scope.DefaultRoleAccess["admins"] != "write" {
-		t.Fatalf("staging default access = %+v", scope.DefaultRoleAccess)
+	if !strings.Contains(readConfig(t, repo), "staging: write") {
+		t.Fatalf("management member was not granted staging write:\n%s", readConfig(t, repo))
 	}
 	for _, want := range []string{
 		"Scope created.",

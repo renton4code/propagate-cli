@@ -22,7 +22,7 @@ MVP implementation stack:
 - Store env values encrypted in the cloud, with decryption controlled by local user keys.
 - Use a project-level config file in Git to make team membership and access changes reviewable.
 - Support common local development layouts, including monorepos and multiple env files.
-- Give admins visibility into pending joins, scope changes, and last secret pulls.
+- Give management members visibility into pending joins, scope changes, and last secret pulls.
 - Make Propagate safe and predictable for AI coding agents that operate through terminal tools and repository instructions.
 
 ## 3. Non-Goals For MVP
@@ -34,7 +34,7 @@ MVP implementation stack:
 - SSO or enterprise identity providers.
 - Secret rotation automation.
 - Browser-based signup/login.
-- Complex policy language beyond roles and environment scopes.
+- Complex policy language beyond management access and environment scopes.
 
 ## 4. Core Concepts
 
@@ -80,7 +80,7 @@ Each scope has:
 
 - One or more env files.
 - A set of encrypted variables.
-- Access rules by role or member.
+- Per-member scope permissions (`read` or `write`) and a separate management bit.
 - Pull history.
 
 A scope may initially be empty. Teams can create the scope metadata first, review and push it, then move existing variable declarations into it or add new variables later.
@@ -95,15 +95,15 @@ Each variable declaration records the env file path, variable name, sensitivity,
 
 Variable declaration edits are metadata-only. Changing a declaration's sensitivity, scope, or presence in `propagate.yaml` must not read local env values, decrypt cloud values, or write plaintext values into the config.
 
-## 5. User Roles
+## 5. Access Model
 
-### 5.1 Admin
+### 5.1 Management Members
 
-Admins can:
+Members with `management: true` can:
 
 - Initialize a project team.
 - Approve pending joins.
-- Approve role and scope changes.
+- Approve management and scope changes.
 - Push local config state to the cloud.
 - Pull cloud config state.
 - Create empty scope metadata for review and config push.
@@ -125,9 +125,9 @@ Developers can:
 - Edit local variable declaration metadata for reviewable config diffs.
 - Push environment variable changes and set individual values only for scopes they can write.
 
-### 5.3 Future Roles
+### 5.3 Future Access Patterns
 
-Potential future roles:
+Potential future access patterns:
 
 - Viewer: read-only access to selected scopes.
 - Maintainer: can approve dev/staging changes but not prod.
@@ -152,7 +152,7 @@ Human-readable output should:
 - Respect `--no-color` by removing ANSI color while keeping the same text, markers, and layout.
 - Keep `--json` output machine-readable and free of ANSI color, decorative symbols, or terminal-only layout.
 - Render `Warnings:` and `Next steps:` with the same section style across commands and errors.
-- Keep common list sections visually consistent, including `Files:`, `Changes:`, `Members:`, `Variables:`, `Requested scopes:`, `Env files:`, and `Default access:`.
+- Keep common list sections visually consistent, including `Files:`, `Changes:`, `Members:`, `Variables:`, `Requested management:`, `Requested scopes:`, `Scope access:`, and `Env files:`.
 - Never print plaintext env values in human output, JSON output, errors, warnings, next steps, or panic paths.
 
 Help and version output may remain plain and script-friendly.
@@ -247,13 +247,13 @@ Adds the current user as a pending invite/request in `propagate.yaml`.
    - Public key SHA.
    - Full public key.
    - Handle.
-   - Requested role: `developers`.
+   - Requested management access, if specified.
    - Requested scopes, if specified.
    - Timestamp.
    - Optional: `invite_id` and invite label when the join was created via a redeemed invite code.
 8. Save the config file.
 9. Notify the user explicitly that this only creates a Git-reviewed access request.
-10. Tell the user to commit the config diff, open a pull request, and ask an admin to approve it.
+10. Tell the user to commit the config diff, open a pull request, and ask a management member to approve it.
 
 #### Notes
 
@@ -285,12 +285,12 @@ Propagate team join
 Next steps:
 1. Commit this config change.
 2. Open a pull request.
-3. Ask a Propagate admin to run propagate config push after approval.
+3. Ask a Propagate management member to run propagate config push after approval.
 ```
 
 ### 6.2.1 `propagate team invite` (planned)
 
-Admin-only command that creates a **short-lived, human-shareable PIN** tied to a **named invite** on the team. The PIN proves the joiner was expected by an admin; it does **not** replace Git review or `propagate config push` approval.
+Management-only command that creates a **short-lived, human-shareable PIN** tied to a **named invite** on the team. The PIN proves the joiner was expected by a management member; it does **not** replace Git review or `propagate config push` approval.
 
 #### PIN format and generation
 
@@ -299,14 +299,14 @@ Admin-only command that creates a **short-lived, human-shareable PIN** tied to a
 - Generation: **cryptographically random** per invite (not sequential, not derived from team or user metadata).
 - Entropy is modest; protection relies on **server-side validation**, **strict attempt limits**, **rate limiting**, and treating `team_id` as a capability (see security notes below).
 
-#### Admin flow
+#### Management flow
 
-1. Admin runs `propagate team invite` from a repo with `propagate.yaml` (or passes `team_id` if the CLI supports non-interactive admin use).
-2. Admin enters an **invite label**: a human-readable name for this slot (for example `Alice Q1 contractor` or `bob@ — laptop refresh`). This is **metadata for the team**, not proof of email ownership.
-3. CLI sends a signed request to the cloud API; server creates an **active invite** and returns the **PIN once** to the admin terminal output.
-4. Admin shares the PIN **out of band** (in person, encrypted channel, etc.). The CLI must **never** echo the PIN again; admins use labels and invite identifiers in status output.
+1. A management member runs `propagate team invite` from a repo with `propagate.yaml` (or passes `team_id` if the CLI supports non-interactive management use).
+2. The management member enters an **invite label**: a human-readable name for this slot (for example `Alice Q1 contractor` or `bob@ — laptop refresh`). This is **metadata for the team**, not proof of email ownership.
+3. CLI sends a signed request to the cloud API; server creates an **active invite** and returns the **PIN once** to the management member's terminal output.
+4. The management member shares the PIN **out of band** (in person, encrypted channel, etc.). The CLI must **never** echo the PIN again; management members use labels and invite identifiers in status output.
 
-Optional flags (exact names TBD) should allow prefilling requested role and scopes consistent with `propagate team join`, so the pending request created after redemption matches policy.
+Optional flags should allow prefilling requested management access and scopes consistent with `propagate team join`, so the pending request created after redemption matches policy.
 
 #### Join by invite code (subflow inside `propagate team join`, planned)
 
@@ -314,21 +314,21 @@ The user reaches this subflow only after choosing **"Join by invite code"** in t
 
 1. CLI uses or refetches the list of **active, unredeemed** invites from the cloud **without requiring team membership** (see technical design for the capability and abuse model). Each row shows **invite label**, **coarse created time**, and an opaque **invite id** for the redemption call—**never** the PIN.
 2. **If exactly one** active invite exists, the CLI may **omit the invite row selection step** and prompt for the PIN directly (still showing the label in the summary line so the joiner can confirm context).
-3. **If multiple** active invites exist, the joiner **selects the row** that matches what they were told by the admin, then enters the PIN.
+3. **If multiple** active invites exist, the joiner **selects the row** that matches what they were told by the management member, then enters the PIN.
 4. CLI submits a **signed PIN verification** request to the cloud (joiner is not yet a member, but the request uses the joiner's Propagate signing identity and replay protection). The server allows **at most two incorrect PIN attempts** for that invite. **On the third failed submission**, the invite becomes **permanently invalid** (removed from the active list or marked in a terminal failure state and unusable for further redemption). A correct PIN on the first or second try **redeems** the invite.
-5. On successful redemption, the pending join written in §6.2 includes **optional correlation fields** (for example `invite_id`, `invite_label`) for audit and admin review. The joiner still **does not** have secret access until an admin approves and runs `propagate config push`.
+5. On successful redemption, the pending join written in §6.2 includes **optional correlation fields** (for example `invite_id`, `invite_label`) for audit and management review. The joiner still **does not** have secret access until a management member approves and runs `propagate config push`.
 
 #### Operational commands (planned)
 
-- `propagate team invite list` (admin): active and recently invalidated invites (without PINs).
-- `propagate team invite revoke <id>` (admin): invalidate without waiting for lockout.
+- `propagate team invite list` (management): active and recently invalidated invites (without PINs).
+- `propagate team invite revoke <id>` (management): invalidate without waiting for lockout.
 
 #### Security and product notes
 
 - The cloud stores **only a verifier** for the PIN (for example a slow password-hash or keyed hash construction), never plaintext PINs.
 - **Rate limiting** applies to invite listing and PIN attempts per invite, team, and calling context as implemented.
 - **Default invite expiry** (time-to-live) is recommended; exact policy is left to implementation and open questions.
-- PIN invites reduce mistaken **wrong-person** PRs when many people share a repo, but admins should still verify the public key and handle in the pending join before approval.
+- PIN invites reduce mistaken **wrong-person** PRs when many people share a repo, but management members should still verify the public key and handle in the pending join before approval.
 
 ### 6.3 `propagate config push`
 
@@ -342,9 +342,9 @@ Synchronizes the local `propagate.yaml` state with the cloud.
 4. If pending items exist, show a TUI approval menu.
 5. Pending items may include:
    - Join requests.
-   - Role changes.
+   - Management changes.
    - Scope access changes.
-6. Admin must make an explicit decision for each pending item:
+6. A management member must make an explicit decision for each pending item:
    - Approve.
    - Decline.
    - Skip for later.
@@ -353,7 +353,7 @@ Synchronizes the local `propagate.yaml` state with the cloud.
    - Upload encrypted access envelopes to the cloud.
 8. If the config adds new scopes:
    - Generate a fresh scope key for each new scope.
-   - Encrypt that scope key for each active member who should have read access under the target config's default role access.
+   - Encrypt that scope key for each active member whose per-member scope map grants read or write access.
    - Upload encrypted access envelopes with the config push.
 9. For declined items:
    - Do not grant cloud access.
@@ -372,8 +372,8 @@ The command output must explicitly summarize all decisions:
 
 - Approved joins.
 - Declined joins.
-- Approved role changes.
-- Declined role changes.
+- Approved management changes.
+- Declined management changes.
 - Approved scope changes.
 - Declined scope changes.
 - Skipped items that remain pending.
@@ -382,9 +382,9 @@ The command output must explicitly summarize all decisions:
 
 #### Access Control
 
-Only admins can approve joins and role changes.
+Only members with management access can approve joins and management changes.
 
-If a non-admin runs this command, the CLI should show which diffs exist but refuse to push privileged changes.
+If a member without management access runs this command, the CLI should show which diffs exist but refuse to push privileged changes.
 
 ### 6.4 `propagate config pull`
 
@@ -431,7 +431,7 @@ propagate scope create qa --dry-run
    - The requested scope name.
    - Empty `env_files` unless `--env-file` is supplied.
    - No variable declarations.
-   - Default role access: `admins: write`; non-`prod` scopes also default to `developers: read`.
+   - Write access for existing management members; other members receive no implicit grant.
 5. Validate the resulting config before writing it.
 6. Save the edited `propagate.yaml`, unless `--dry-run` is used.
 7. Do not prompt for source scopes or clone metadata during scope creation.
@@ -450,7 +450,7 @@ propagate scope create qa --dry-run
 
 #### Publishing Requirements
 
-`propagate scope create` is local metadata only. The new scope becomes cloud-visible after an admin runs `propagate config push`.
+`propagate scope create` is local metadata only. The new scope becomes cloud-visible after a management member runs `propagate config push`.
 
 When publishing a new scope, `propagate config push` must create a fresh scope key and upload encrypted scope key envelopes for authorized active members. The server must never receive the plaintext scope key.
 
@@ -460,7 +460,7 @@ Users should run `propagate config edit` to add env file mappings or move declar
 
 - Scope name.
 - Env file mappings, if any.
-- Default role access.
+- Management members granted write access.
 - Whether `propagate.yaml` was modified.
 - Next steps for publishing metadata and seeding values through existing env workflows.
 
@@ -634,7 +634,7 @@ If the user lacks write access, the CLI should:
 - Show the scope.
 - Show the current identity.
 - Refuse the push before upload.
-- Suggest requesting a role or scope change.
+- Suggest requesting an access change.
 
 ### 6.11 `propagate env set`
 
@@ -687,7 +687,7 @@ If the user lacks write access, the CLI should:
 - Show the scope.
 - Show the current identity.
 - Refuse before upload.
-- Suggest requesting a role or scope change.
+- Suggest requesting an access change.
 
 ### 6.12 `propagate env status`
 
@@ -724,11 +724,11 @@ Shows team membership, pending requests, access changes, and pull activity.
 #### Output Should Include
 
 - Team name.
-- Current user's role.
+- Current user's management bit and scope permissions.
 - Current user's public key SHA.
-- Members by role.
+- Members grouped by management vs non-management access.
 - Pending join requests.
-- Pending role changes.
+- Pending management changes.
 - Pending scope access changes.
 - Last pull by member and scope.
 - Members who have never pulled.
@@ -789,9 +789,9 @@ Must show:
 - Pending joins.
 - Public key SHA.
 - Handle.
-- Requested role.
+- Requested management access.
 - Requested scopes.
-- Pending role changes.
+- Pending management changes.
 - Pending scope changes.
 
 Actions:
@@ -884,9 +884,9 @@ Agent-friendly behavior includes:
 - Consistent human-readable output with command titles, semantic status markers, styled sections, and `--no-color` support.
 - No plaintext env values in stdout, stderr, logs, JSON, or panic output.
 - Operation IDs included in JSON responses for traceability.
-- Error messages that include safe next steps, such as "run `propagate team join`" or "ask an admin to approve access."
+- Error messages that include safe next steps, such as "run `propagate team join`" or "ask a management member to approve access."
 
-Agent-friendly behavior must not bypass human approval. Commands that write env files, upload encrypted env values, approve access, or publish config should require explicit confirmation unless a user intentionally passes a non-interactive approval flag. Local metadata-only commands such as `propagate team join` and `propagate scope create` may run non-interactively because their changes remain Git-reviewable until an admin publishes them.
+Agent-friendly behavior must not bypass human approval. Commands that write env files, upload encrypted env values, approve access, or publish config should require explicit confirmation unless a user intentionally passes a non-interactive approval flag. Local metadata-only commands such as `propagate team join` and `propagate scope create` may run non-interactively because their changes remain Git-reviewable until a management member publishes them.
 
 ### 8.4 Agent Audit Metadata
 
@@ -935,42 +935,37 @@ scopes:
         env_file_path: .env
         sensitivity: non_sensitive
         literal: "https://api.example.com"
-    default_role_access:
-      developers: read
-      admins: write
   staging:
     env_files:
       - .env.staging
-    default_role_access:
-      developers: read
-      admins: write
   qa:
     env_files: []
-    default_role_access:
-      developers: read
-      admins: write
   prod:
     env_files:
       - .env.production
-    default_role_access:
-      admins: write
 
 members:
   - handle: alice@example.com
     public_key_sha: sha256:abc123
     public_key: ssh-ed25519 AAAA...
-    role: admins
+    management: true
+    scopes:
+      dev: write
+      staging: write
+      qa: write
+      prod: write
   - handle: bob@example.com
     public_key_sha: sha256:def456
     public_key: ssh-ed25519 BBBB...
-    role: developers
+    scopes:
+      dev: read
+      staging: write
 
 pending:
   joins:
     - handle: carol@example.com
       public_key_sha: sha256:ghi789
       public_key: ssh-ed25519 CCCC...
-      requested_role: developers
       requested_scopes:
         dev: read
       created_at: "2026-04-30T10:00:00Z"
@@ -1009,7 +1004,7 @@ Recommended model:
 1. Each scope has a symmetric scope key.
 2. Each env value is encrypted with the scope key.
 3. The scope key is encrypted for each authorized member public key.
-4. When access is granted, an admin client uploads a new encrypted envelope for that member.
+4. When access is granted, a management client uploads a new encrypted envelope for that member.
 5. When access is revoked, future versions are no longer encrypted for that member.
 
 ### 10.3 Audit Events
@@ -1052,15 +1047,14 @@ admin
 Access is evaluated by:
 
 1. Team membership.
-2. Role.
-3. Scope.
-4. Explicit member override, if present.
+2. Requested scope.
+3. The member's explicit scope permission.
 
 Expected behavior:
 
 - `read`: can pull and view env status.
 - `write`: can read, push env changes, and set individual env values.
-- `admin`: can manage config, approve joins, approve role changes, and write all scopes unless restricted later.
+The separate `management: true` member bit controls config management, invite management, and approval of joins or access changes. Scope access is still explicit per member; management does not need to imply production read or write access unless that scope grant is present.
 
 ## 12. Monorepo Support
 
@@ -1146,7 +1140,7 @@ git push
 
 The separate `propagate init` then `propagate team join` flow remains available for users who want to initialize identity or agent guidance separately.
 
-Admin approval flow:
+Management approval flow:
 
 ```bash
 git pull
@@ -1162,7 +1156,7 @@ MVP success metrics:
 
 - Time from install to first encrypted env upload.
 - Time for a new developer to request access.
-- Time for admin to approve a join.
+- Time for a management member to approve a join.
 - Percentage of teams that successfully pull envs after setup.
 - Number of `.env` files replaced or managed by Propagate.
 - Number of secret pushes per team per week.
@@ -1211,7 +1205,7 @@ MVP success metrics:
 - Automatic leak scanning on commit.
 - Dedicated non-human AI agent identities with explicit scopes.
 - Agent-specific approval policies and richer audit dashboards.
-- **Admin-issued PIN invites** (`propagate team invite`, list/revoke, join integration as in §6.2.1).
+- **Management-issued PIN invites** (`propagate team invite`, list/revoke, join integration as in §6.2.1).
 
 ## 17. Suggestions, Design Issues, And Open Questions
 
@@ -1231,7 +1225,7 @@ MVP success metrics:
 ### Design Issues
 
 - Git-mediated joins are transparent, but they may feel unusual because a user modifies project config before having access. The CLI must make this explicit by saying the user has created an access request, not joined the team.
-- Admin approval requires the admin client to perform encryption for the new member. The server cannot complete approval alone in an end-to-end encrypted design. `propagate config push` must ask for an explicit decision on each pending item and update `propagate.yaml` to reflect approved, declined, and skipped changes.
+- Management approval requires the approving client to perform encryption for the new member. The server cannot complete approval alone in an end-to-end encrypted design. `propagate config push` must ask for an explicit decision on each pending item and update `propagate.yaml` to reflect approved, declined, and skipped changes.
 - Revocation cannot erase secrets already pulled to a developer machine. The product should make this clear and eventually support rotation.
 - Pulling into `.env` is familiar but less safe than runtime injection. The MVP should include warnings and guardrails.
 - Monorepo env discovery can produce noisy results. The scanner must only inspect Git project directories, and the TUI must let users choose which discovered env files belong to each scope.
@@ -1239,16 +1233,16 @@ MVP success metrics:
 - If handles are not verified emails, duplicate or misleading handles are possible.
 - Some env vars may appear public, such as feature flags or local service URLs. The MVP must default them to sensitive; users must explicitly mark a variable `non_sensitive` before Propagate stores a direct literal or preview in Git-backed config.
 - AI agents may be able to read local files and terminal output. Propagate can make the safe path obvious, but it cannot guarantee an agent will not misuse access outside Propagate. Sensitive operations still need CLI and server enforcement.
-- **PIN invites** add a short, memorable shared secret with limited entropy; they rely on server-side hashing, per-invite lockout, rate limits, invite TTL, and treating `team_id` as a capability. They improve social clarity ("this slot was for Alice") but are not a substitute for admin review of the public key in the pending join.
+- **PIN invites** add a short, memorable shared secret with limited entropy; they rely on server-side hashing, per-invite lockout, rate limits, invite TTL, and treating `team_id` as a capability. They improve social clarity ("this slot was for Alice") but are not a substitute for management review of the public key in the pending join.
 
 ### Open Questions
 
 - Should the canonical config file be `propagate.yaml`, `propagate.yml`, or should both be supported?
 - Should `propagate init` require a Git repository, or allow standalone local projects?
 - Should local identity use SSH keys directly, or a dedicated age/Ed25519 key format stored under `~/.propagate`?
-- Should the first admin be the user who runs `propagate init`, or should the team require explicit admin confirmation?
+- Should the first management member be the user who runs `propagate init`, or should the team require explicit management confirmation?
 - Should scope keys be one key per scope or one key per env file?
-- Should developers be allowed to push `dev` secrets by default, or should write access be admin-only until granted?
+- Should new members be allowed to push `dev` secrets by default, or should write access be management-only until granted?
 - How should conflicts be handled when local `propagate.yaml` and cloud config both changed?
 - Should `propagate env pull` overwrite existing local values, merge only missing values, or prompt every time?
 - Should removed variables in cloud delete local `.env` entries during pull?
@@ -1260,6 +1254,6 @@ MVP success metrics:
 - Which agent instruction targets should be first-class in MVP: generic `AGENTS.md`, Codex skills, Cursor rules, Claude instructions, GitHub Copilot instructions, or a smaller initial set?
 - Should agent guidance be enabled by default during `propagate init`, or only when a known agent configuration is detected?
 - Should AI agents ever receive their own Propagate identities, or should MVP agents always operate through the human user's local identity?
-- For **PIN invites**, what default expiry should apply (for example 7 days vs 30 days), and should admins be able to extend an invite without reissuing?
+- For **PIN invites**, what default expiry should apply (for example 7 days vs 30 days), and should management members be able to extend an invite without reissuing?
 - Should unauthenticated **invite listing by `team_id`** remain the default join UX, or should teams optionally require an extra **listing token** shared with the joiner to reduce metadata exposure?
-- Should PIN lockout after failed attempts require admin notification (for example in `team status`)?
+- Should PIN lockout after failed attempts require management notification (for example in `team status`)?

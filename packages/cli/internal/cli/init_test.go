@@ -64,7 +64,8 @@ func TestInitCreatesMetadataOnlyConfig(t *testing.T) {
 		`name: "Acme API"`,
 		`env_files:`,
 		`- ".env"`,
-		`role: admins`,
+		`management: true`,
+		`dev: write`,
 		`pending:`,
 	} {
 		if !strings.Contains(configText, want) {

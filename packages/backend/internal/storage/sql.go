@@ -85,9 +85,9 @@ func (s *SQLStore) CreateTeamSetup(ctx context.Context, request domain.TeamSetup
 	if _, err := tx.ExecContext(ctx, `
 		insert into members (
 			team_id, handle, public_key_sha, signing_public_key, encryption_public_key,
-			role, status, approved_by_key_sha, approved_at
+			role, management, status, approved_by_key_sha, approved_at
 		)
-		values ($1, $2, $3, $4, $5, 'admins', 'active', $3, now())
+		values ($1, $2, $3, $4, $5, 'admins', true, 'active', $3, now())
 	`, teamID, request.FirstAdmin.Handle, request.FirstAdmin.PublicKeySHA, request.FirstAdmin.SigningPublicKey, request.FirstAdmin.EncryptionPublicKey); err != nil {
 		return domain.SetupResult{}, err
 	}
@@ -120,6 +120,14 @@ func (s *SQLStore) CreateTeamSetup(ctx context.Context, request domain.TeamSetup
 			`, teamID, scopeID, role, permission); err != nil {
 				return domain.SetupResult{}, err
 			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			insert into scope_access_rules (
+				team_id, scope_id, subject_type, subject_value, permission, config_revision, active
+			)
+			values ($1, $2, 'member', $3, 'write', 1, true)
+		`, teamID, scopeID, request.FirstAdmin.PublicKeySHA); err != nil {
+			return domain.SetupResult{}, err
 		}
 	}
 
@@ -308,7 +316,7 @@ func scopeKind(name string) string {
 func (s *SQLStore) GetMember(ctx context.Context, teamID string, publicKeySHA string) (domain.Member, error) {
 	var member domain.Member
 	err := s.db.QueryRowContext(ctx, `
-		select handle, public_key_sha, signing_public_key, encryption_public_key, role, status
+		select handle, public_key_sha, signing_public_key, encryption_public_key, role, management, status
 		from members
 		where team_id = $1 and public_key_sha = $2 and status = 'active'
 	`, teamID, publicKeySHA).Scan(
@@ -317,6 +325,7 @@ func (s *SQLStore) GetMember(ctx context.Context, teamID string, publicKeySHA st
 		&member.SigningPublicKey,
 		&member.EncryptionPublicKey,
 		&member.Role,
+		&member.Management,
 		&member.Status,
 	)
 	if err == sql.ErrNoRows {
@@ -401,7 +410,7 @@ func (s *SQLStore) GetConfig(ctx context.Context, teamID string, actor domain.Me
 }
 
 func (s *SQLStore) PushConfig(ctx context.Context, teamID string, actor domain.Member, request domain.ConfigPushRequest) (domain.ConfigPushResult, error) {
-	if actor.Role != "admins" {
+	if !domain.MemberCanManage(actor) {
 		return domain.ConfigPushResult{}, ErrPermissionDenied
 	}
 	fingerprint, err := domain.FingerprintConfigPush(request)
@@ -747,10 +756,10 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 		return domain.TeamStatusData{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		select handle, public_key_sha, signing_public_key, encryption_public_key, role, status
+		select handle, public_key_sha, signing_public_key, encryption_public_key, role, management, status
 		from members
 		where team_id = $1 and status = 'active'
-		order by role, public_key_sha
+		order by management desc, public_key_sha
 	`, teamID)
 	if err != nil {
 		return domain.TeamStatusData{}, err
@@ -761,10 +770,15 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 	var all []domain.Member
 	for rows.Next() {
 		var member domain.Member
-		if err := rows.Scan(&member.Handle, &member.PublicKeySHA, &member.SigningPublicKey, &member.EncryptionPublicKey, &member.Role, &member.Status); err != nil {
+		if err := rows.Scan(&member.Handle, &member.PublicKeySHA, &member.SigningPublicKey, &member.EncryptionPublicKey, &member.Role, &member.Management, &member.Status); err != nil {
 			return domain.TeamStatusData{}, err
 		}
-		members[member.Role] = append(members[member.Role], member)
+		scopes, err := memberScopesSQL(ctx, s.db, teamID, member.PublicKeySHA)
+		if err != nil {
+			return domain.TeamStatusData{}, err
+		}
+		member.Scopes = scopes
+		members[memberGroup(member)] = append(members[memberGroup(member)], member)
 		all = append(all, member)
 	}
 	if err := rows.Err(); err != nil {
@@ -783,6 +797,11 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 			never = append(never, member)
 		}
 	}
+	actorScopes, err := memberScopesSQL(ctx, s.db, teamID, actor.PublicKeySHA)
+	if err != nil {
+		return domain.TeamStatusData{}, err
+	}
+	actor.Scopes = actorScopes
 	return domain.TeamStatusData{
 		Team: domain.TeamSummary{
 			ID:             teamID,
@@ -803,11 +822,13 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 			Name string `json:"name"`
 		} `json:"team"`
 		Members []struct {
-			Handle              string `json:"handle"`
-			PublicKeySHA        string `json:"public_key_sha"`
-			SigningPublicKey    string `json:"signing_public_key"`
-			EncryptionPublicKey string `json:"encryption_public_key"`
-			Role                string `json:"role"`
+			Handle              string            `json:"handle"`
+			PublicKeySHA        string            `json:"public_key_sha"`
+			SigningPublicKey    string            `json:"signing_public_key"`
+			EncryptionPublicKey string            `json:"encryption_public_key"`
+			Role                string            `json:"role"`
+			Management          bool              `json:"management"`
+			Scopes              map[string]string `json:"scopes"`
 		} `json:"members"`
 		Scopes map[string]struct {
 			EnvFiles          []string          `json:"env_files"`
@@ -830,19 +851,21 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 		if role == "" {
 			role = "developers"
 		}
+		management := member.Management || role == "admins"
 		if _, err := tx.ExecContext(ctx, `
 			insert into members (
 				team_id, handle, public_key_sha, signing_public_key, encryption_public_key,
-				role, status, approved_at
+				role, management, status, approved_at
 			)
-			values ($1, $2, $3, $4, $5, $6, 'active', now())
+			values ($1, $2, $3, $4, $5, $6, $7, 'active', now())
 			on conflict (team_id, public_key_sha) do update set
 				handle = excluded.handle,
 				signing_public_key = excluded.signing_public_key,
 				encryption_public_key = excluded.encryption_public_key,
 				role = excluded.role,
+				management = excluded.management,
 				status = 'active'
-		`, teamID, member.Handle, member.PublicKeySHA, member.SigningPublicKey, member.EncryptionPublicKey, role); err != nil {
+		`, teamID, member.Handle, member.PublicKeySHA, member.SigningPublicKey, member.EncryptionPublicKey, role, management); err != nil {
 			return err
 		}
 	}
@@ -855,7 +878,7 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		update scope_access_rules set active = false where team_id = $1 and subject_type = 'role' and active = true
+		update scope_access_rules set active = false where team_id = $1 and active = true
 	`, teamID); err != nil {
 		return err
 	}
@@ -884,6 +907,22 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 				)
 				values ($1, $2, 'role', $3, $4, $5, true)
 			`, teamID, sid, role, permission, revision); err != nil {
+				return err
+			}
+		}
+	}
+	for _, member := range snapshot.Members {
+		for scopeName, permission := range member.Scopes {
+			sid, err := scopeID(ctx, tx, teamID, scopeName)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				insert into scope_access_rules (
+					team_id, scope_id, subject_type, subject_value, permission, config_revision, active
+				)
+				values ($1, $2, 'member', $3, $4, $5, true)
+			`, teamID, sid, member.PublicKeySHA, permission, revision); err != nil {
 				return err
 			}
 		}
@@ -1189,6 +1228,33 @@ func lastPullsSQL(ctx context.Context, db *sql.DB, teamID string) ([]domain.Pull
 		pulls = append(pulls, item)
 	}
 	return pulls, rows.Err()
+}
+
+func memberScopesSQL(ctx context.Context, db *sql.DB, teamID string, publicKeySHA string) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		select s.name, r.permission
+		from scope_access_rules r
+		join scopes s on s.id = r.scope_id
+		where r.team_id = $1
+			and r.subject_type = 'member'
+			and r.subject_value = $2
+			and r.active = true
+			and s.archived_at is null
+		order by s.name, r.id
+	`, teamID, publicKeySHA)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var scope, permission string
+		if err := rows.Scan(&scope, &permission); err != nil {
+			return nil, err
+		}
+		out[scope] = permission
+	}
+	return out, rows.Err()
 }
 
 func versionIDString(id int64) string {

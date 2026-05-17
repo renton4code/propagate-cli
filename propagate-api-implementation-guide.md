@@ -27,7 +27,7 @@ Implementation should follow these rules:
 - Treat the API as a workflow boundary, not a raw table gateway.
 - Verify request signatures before invoking protected stored functions.
 - Reject replayed signed requests.
-- Derive authorization from database state, never from client-provided role claims.
+- Derive authorization from database state, never from client-provided access claims.
 - Keep env values and plaintext scope keys out of request logs, API errors, audit metadata, and database plaintext columns.
 - Require expected config revisions and secret version IDs for writes.
 - Use operation IDs for idempotent mutating requests.
@@ -47,7 +47,7 @@ Recommended Go service layers:
 | JSON layer | Decode/encode stable request and response envelopes |
 | Signature middleware | Canonicalize signed requests, verify Ed25519 signatures, validate body digest and timestamp |
 | Replay middleware | Reserve nonce in Postgres and reject duplicate signed requests |
-| Auth context layer | Resolve team, actor, role, scope, and effective permissions |
+| Auth context layer | Resolve team, actor, management access, scope, and effective permissions |
 | Handler layer | Implement endpoint workflows and call stored functions |
 | Database layer | Manage Postgres pool, call stored functions, map SQL errors |
 | Error layer | Convert domain errors into HTTP statuses and stable API codes |
@@ -100,7 +100,7 @@ Request actor fields:
 | `signing_public_key` | Used only during setup or membership metadata validation |
 | `handle` | Display metadata |
 | `team_id` | Team context for protected routes |
-| `role` | Derived from database membership |
+| `management` | Derived from database membership |
 | `status` | Active, revoked, or replaced |
 
 Only `public_key_sha` and signed request metadata identify the caller. Handles are never authorization inputs.
@@ -113,8 +113,8 @@ Config snapshot fields:
 | --- | --- |
 | `version` | Config format version |
 | `team` | Team ID, name, revision |
-| `scopes` | Scope names, env file mappings, variable declarations, default access |
-| `members` | Public identity material and roles |
+| `scopes` | Scope names, env file mappings, variable declarations |
+| `members` | Public identity material, management bit, and per-scope permissions |
 | `pending` | Non-secret pending requests |
 | `history` | Optional non-secret resolution metadata |
 
@@ -149,7 +149,7 @@ Envelope fields:
 | `scope_key_version` | Scope key version |
 | `encrypted_scope_key` | Ciphertext encrypted to recipient |
 | `algorithm` | Envelope algorithm |
-| `created_by_key_sha` | Admin actor |
+| `created_by_key_sha` | Management actor |
 | `config_revision` | Revision granting access |
 
 The API stores and returns envelopes, but never decrypts them.
@@ -247,9 +247,8 @@ Evaluation order:
 1. Verify signature and replay protection.
 2. Load active team member by `team_id` and `public_key_sha`.
 3. Resolve requested scope if route is scope-specific.
-4. Apply member-specific access rule when present.
-5. Otherwise apply role-level access rule.
-6. Enforce required permission.
+4. Apply the member's explicit scope permission for scope-specific routes.
+5. Enforce required permission.
 
 Permission requirements:
 
@@ -257,7 +256,7 @@ Permission requirements:
 | --- | --- |
 | Config status | Active member |
 | Config pull | Active member |
-| Config push | Admin |
+| Config push | Management |
 | Scope key envelope | Read for that scope |
 | Pull bundle | Read for that scope |
 | Env push | Write for that scope |
@@ -343,7 +342,7 @@ Behavior:
 
 ### 9.2 `POST /v1/teams/setup`
 
-Authentication: signed request using the first admin's local identity.
+Authentication: signed request using the first management member's local identity.
 
 Required permission: none, because this creates a new team. The request signature still proves control of the submitted signing private key.
 
@@ -353,16 +352,16 @@ Request data:
 | --- | --- |
 | `operation_id` | Idempotency |
 | `team_name` | Display name |
-| `first_admin` | Handle, public key SHA, signing public key, encryption public key |
+| `first_admin` | Legacy API field name for the first management member: handle, public key SHA, signing public key, encryption public key |
 | `config_snapshot` | Initial metadata-only config |
 | `scopes` | Scope definitions and env file mappings |
 | `encrypted_secret_versions` | Initial encrypted env values |
-| `scope_key_envelopes` | First admin envelopes |
+| `scope_key_envelopes` | First management member envelopes |
 | `client` | CLI version and safe client metadata |
 
 Validation:
 
-- Verify signature against submitted first admin signing public key.
+- Verify signature against submitted first management member signing public key.
 - Verify public key SHA matches signing public key.
 - Reject snapshots containing env values.
 - Verify env file paths are repo-relative and normalized.
@@ -444,7 +443,7 @@ Behavior:
 
 Authentication: signed.
 
-Required permission: admin.
+Required permission: management on the team.
 
 Request data:
 
@@ -454,12 +453,12 @@ Request data:
 | `expected_config_revision` | Optimistic concurrency |
 | `target_config_snapshot` | Metadata-only accepted config |
 | `decisions` | Approved, declined, skipped summaries |
-| `scope_key_envelopes` | Envelopes created by admin client |
+| `scope_key_envelopes` | Envelopes created by the management client |
 | `client` | CLI and safe client metadata |
 
 Validation:
 
-- Actor must be active admin.
+- Actor must be an active management member.
 - Expected revision must match current cloud revision.
 - Snapshot must contain no env values.
 - Approved access grants that require envelopes must include them.
@@ -515,7 +514,7 @@ Authentication: signed.
 
 Required permission: read on scope.
 
-Purpose: let an admin client decrypt the current scope key before creating envelopes for newly approved members.
+Purpose: let a management client decrypt the current scope key before creating envelopes for newly approved members.
 
 Response data:
 
@@ -637,7 +636,7 @@ Response data:
 | Field | Purpose |
 | --- | --- |
 | `team` | Team ID, name, revisions |
-| `actor` | Current actor handle, public key SHA, role |
+| `actor` | Current actor handle, public key SHA, management bit, scope permissions |
 | `members` | Active and relevant revoked members |
 | `pending_or_recent_access` | Safe metadata from config/audit |
 | `last_pulls` | Last pull per member/scope |
@@ -652,7 +651,7 @@ Behavior:
 
 Authentication: signed.
 
-Required permission: admin on the team.
+Required permission: management on the team.
 
 Purpose: create a labeled PIN invite. Returns the **PIN once** in the response; persist only a verifier server-side.
 
@@ -661,8 +660,8 @@ Request data:
 | Field | Purpose |
 | --- | --- |
 | `operation_id` | Idempotency |
-| `label` | Admin-entered invite name shown in joiner UI |
-| `requested_role` | Optional default for pending join |
+| `label` | Management-entered invite name shown in joiner UI |
+| `requested_management` | Optional management request default for pending join |
 | `requested_scopes` | Optional default scope permissions for pending join |
 | `client` | CLI metadata |
 
@@ -676,7 +675,7 @@ Response data:
 
 Failure cases:
 
-- Non-admin actor.
+- Actor without management access.
 - Too many active invites for team (optional policy).
 - Invalid label (length, charset).
 
@@ -710,7 +709,7 @@ Request data:
 | `operation_id` | Idempotency |
 | `pin` | Candidate PIN |
 | `handle` | Joiner handle to echo into pending join metadata |
-| `requested_role` | Optional override |
+| `requested_management` | Optional management request override |
 | `requested_scopes` | Optional override |
 | `client` | CLI metadata |
 
@@ -732,7 +731,7 @@ Response data:
 
 Authentication: signed.
 
-Required permission: admin.
+Required permission: management on the team.
 
 Purpose: list invites including **non-active** rows for operational visibility (without PINs).
 
@@ -740,7 +739,7 @@ Purpose: list invites including **non-active** rows for operational visibility (
 
 Authentication: signed.
 
-Required permission: admin.
+Required permission: management on the team.
 
 Purpose: invalidate an invite before redemption or after policy.
 
@@ -751,7 +750,7 @@ The API should call stored functions for data-local transactions.
 | Function Area | API Caller | Responsibility |
 | --- | --- | --- |
 | Reserve nonce | Replay middleware | Insert nonce atomically and reject duplicates |
-| Resolve member access | Auth context and mutating functions | Return actor status, role, scope, effective permission |
+| Resolve member access | Auth context and mutating functions | Return actor status, management bit, scope, effective permission |
 | Create team | Team setup handler | Transactional team creation |
 | Push config revision | Config push handler | Transactional revision update and access changes |
 | Fetch config snapshot | Config handlers | Return current normalized config |
@@ -899,7 +898,7 @@ Signing compatibility:
 | Timestamp validation | Accepted window, expired request, future request |
 | Error mapping | Domain and SQL errors to HTTP/code/retryable |
 | Redaction | Logs and errors exclude forbidden fields |
-| Metadata validation | Keys, paths, roles, scopes, operation IDs, plaintext rejection |
+| Metadata validation | Keys, paths, management grants, scope permissions, operation IDs, plaintext rejection |
 | Idempotency | Same operation ID same payload, same operation ID different payload |
 
 ### 15.2 Handler Tests
@@ -923,7 +922,7 @@ Run against disposable Postgres/Supabase-compatible database.
 Required coverage:
 
 - Nonce unique constraint and cleanup.
-- Permission resolution order: member override before role rule.
+- Permission resolution order: explicit member scope grants before old access-rule rows during migrations.
 - Config push revision conflict.
 - Config push idempotent retry.
 - Env push expected version conflict.

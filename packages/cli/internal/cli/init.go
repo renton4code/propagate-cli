@@ -200,7 +200,7 @@ func runInitWithReader(opts initOptions, streams Streams, reader *bufio.Reader) 
 			"config_missing",
 			"propagate.yaml is required before requesting team access",
 			nil,
-			"Ask an admin to share the repository's Propagate config before running `propagate team join --init`.",
+			"Ask a Propagate management member to share the repository's Propagate config before running `propagate team join --init`.",
 		)
 	}
 
@@ -410,15 +410,15 @@ func parsedProjectFromProject(project config.Project) config.ParsedProject {
 			PublicKeySHA:        project.Admin.PublicKeySHA,
 			SigningPublicKey:    project.Admin.SigningPublicKey,
 			EncryptionPublicKey: project.Admin.EncryptionPublicKey,
-			Role:                "admins",
+			Management:          true,
+			Scopes:              projectAdminScopes(project.Scopes),
 		}},
 	}
 	for _, scope := range project.Scopes {
 		parsed.Scopes = append(parsed.Scopes, config.ScopeSummary{
-			Name:              scope.Name,
-			EnvFiles:          append([]string(nil), scope.EnvFiles...),
-			Variables:         append([]config.VariableDeclaration(nil), scope.Variables...),
-			DefaultRoleAccess: defaultRoleAccess(scope.Name),
+			Name:      scope.Name,
+			EnvFiles:  append([]string(nil), scope.EnvFiles...),
+			Variables: append([]config.VariableDeclaration(nil), scope.Variables...),
 		})
 	}
 	return parsed
@@ -428,20 +428,20 @@ func setupScopesFromProject(project config.Project) []apiclient.SetupScope {
 	out := make([]apiclient.SetupScope, 0, len(project.Scopes))
 	for _, scope := range project.Scopes {
 		out = append(out, apiclient.SetupScope{
-			Name:              scope.Name,
-			EnvFiles:          append([]string(nil), scope.EnvFiles...),
-			Variables:         apiVariableDeclarations(scope.Variables),
-			DefaultRoleAccess: defaultRoleAccess(scope.Name),
+			Name:      scope.Name,
+			EnvFiles:  append([]string(nil), scope.EnvFiles...),
+			Variables: apiVariableDeclarations(scope.Variables),
 		})
 	}
 	return out
 }
 
-func defaultRoleAccess(scopeName string) map[string]string {
-	if scopeName == "prod" {
-		return map[string]string{"admins": "write"}
+func projectAdminScopes(scopes []config.Scope) map[string]string {
+	out := map[string]string{}
+	for _, scope := range scopes {
+		out[scope.Name] = "write"
 	}
-	return map[string]string{"admins": "write", "developers": "read"}
+	return out
 }
 
 func publicIdentity(summary identity.Summary) apiclient.PublicIdentity {

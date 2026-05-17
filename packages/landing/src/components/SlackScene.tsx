@@ -8,8 +8,6 @@ const INCOMING_MENTION = "@here";
 const INCOMING_REST = " just pulled main and the app won't start — missing STRIPE_SECRET_KEY and REDIS_URL. Can someone send me the latest .env?";
 const DRAFT_1 = "Check #dev-onboarding, I think Sarah posted a 1Password link last week but it might be exp";
 const DRAFT_2 = "Pull the latest .env with propagate — everyone gets updated vars automatically and securely.";
-const TYPO_DRAFT = "hang on let me get send you the";
-const TYPO_BACKTO = 0;
 
 function buildKeystrokeWeights(text: string): number[] {
   const w: number[] = [];
@@ -43,39 +41,26 @@ function computeState(p: number) {
   const incomingVisible = p >= 0.06;
   let draft = "";
 
-  if (p >= 0.1 && p < 0.32) {
-    const t = (p - 0.1) / (0.32 - 0.1);
+  if (p >= 0.1 && p < 0.35) {
+    const t = (p - 0.1) / (0.35 - 0.1);
     draft = DRAFT_1.slice(0, charsAtProgress(DRAFT_1, t));
-  } else if (p >= 0.32 && p < 0.4) {
+  } else if (p >= 0.35 && p < 0.45) {
     draft = DRAFT_1;
-  } else if (p >= 0.4 && p < 0.55) {
-    const t = (p - 0.4) / (0.55 - 0.4);
+  } else if (p >= 0.45 && p < 0.6) {
+    const t = (p - 0.45) / (0.6 - 0.45);
     const remaining = Math.round(DRAFT_1.length * (1 - t));
     draft = DRAFT_1.slice(0, Math.max(0, remaining));
-  } else if (p >= 0.55 && p < 0.6) {
+  } else if (p >= 0.6 && p < 0.65) {
     draft = "";
-  } else if (p >= 0.6 && p < 0.7) {
-    const t = (p - 0.6) / (0.7 - 0.6);
-    draft = TYPO_DRAFT.slice(0, charsAtProgress(TYPO_DRAFT, t));
-  } else if (p >= 0.7 && p < 0.74) {
-    draft = TYPO_DRAFT;
-  } else if (p >= 0.74 && p < 0.77) {
-    const t = (p - 0.74) / (0.77 - 0.74);
-    const len = Math.round(TYPO_DRAFT.length - (TYPO_DRAFT.length - TYPO_BACKTO) * t);
-    draft = TYPO_DRAFT.slice(0, Math.max(TYPO_BACKTO, len));
-  } else if (p >= 0.77 && p <= 1) {
-    const t = Math.min(1, (p - 0.77) / (0.95 - 0.77));
-    const remaining = DRAFT_2.slice(TYPO_BACKTO);
-    const revealed = remaining.slice(0, charsAtProgress(remaining, t));
-    draft = DRAFT_2.slice(0, TYPO_BACKTO) + revealed;
+  } else if (p >= 0.65 && p <= 1) {
+    const t = Math.min(1, (p - 0.65) / (0.92 - 0.65));
+    draft = DRAFT_2.slice(0, charsAtProgress(DRAFT_2, t));
   }
 
   const isTyping =
-    (p >= 0.1 && p < 0.32) ||
-    (p >= 0.4 && p < 0.55) ||
-    (p >= 0.6 && p < 0.7) ||
-    (p >= 0.74 && p < 0.77) ||
-    (p >= 0.77 && p < 0.95);
+    (p >= 0.1 && p < 0.35) ||
+    (p >= 0.45 && p < 0.6) ||
+    (p >= 0.65 && p < 0.92);
 
   return { incomingVisible, draft, isTyping };
 }
@@ -320,7 +305,7 @@ function SlackMock({
               padding: "14px 18px",
             }}
           >
-            <p style={{ minHeight: "1.5rem", fontSize: 15, lineHeight: 1.6, color: "#fff", fontFamily: "inherit" }}>
+            <p style={{ minHeight: "3rem", fontSize: 15, lineHeight: 1.6, color: "#fff", fontFamily: "inherit" }}>
               {draft || <span style={{ color: "#444" }}>Message #dev</span>}
               {caret && (
                 <span

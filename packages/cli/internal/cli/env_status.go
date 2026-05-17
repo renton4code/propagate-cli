@@ -366,7 +366,7 @@ func mapEnvStatusAPIError(err error, scope string, ident identity.Summary) error
 			apiErr.Code,
 			fmt.Sprintf("Cannot inspect env status for scope %q with identity %s", scope, ident.PublicKeySHA),
 			apiErr,
-			"Ask a Propagate admin to grant read access for this scope.",
+			"Ask a Propagate management member to grant read access for this scope.",
 		)
 	case "team_not_found", "scope_not_found":
 		return commandError(ExitValidationError, apiErr.Code, "The requested team or scope was not found in the cloud", apiErr, "Run `propagate config pull` if the local config is stale.")

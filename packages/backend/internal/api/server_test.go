@@ -200,10 +200,6 @@ func TestConfigPushUpdatesRevision(t *testing.T) {
 		"scopes": map[string]any{
 			"dev": map[string]any{
 				"env_files": []any{".env", ".env.local"},
-				"default_role_access": map[string]any{
-					"admins":     "write",
-					"developers": "read",
-				},
 			},
 		},
 		"members": []any{
@@ -212,7 +208,10 @@ func TestConfigPushUpdatesRevision(t *testing.T) {
 				"public_key_sha":        signer.sha,
 				"signing_public_key":    signer.ssh,
 				"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
-				"role":                  "admins",
+				"management":            true,
+				"scopes": map[string]any{
+					"dev": "write",
+				},
 			},
 		},
 		"pending": map[string]any{"joins": []any{}, "access_changes": []any{}},
@@ -261,16 +260,9 @@ func TestConfigPushGrantsApprovedMemberScopeAccess(t *testing.T) {
 		"scopes": map[string]any{
 			"dev": map[string]any{
 				"env_files": []any{".env"},
-				"default_role_access": map[string]any{
-					"admins":     "write",
-					"developers": "read",
-				},
 			},
 			"prod": map[string]any{
 				"env_files": []any{".env.production"},
-				"default_role_access": map[string]any{
-					"admins": "write",
-				},
 			},
 		},
 		"members": []any{
@@ -279,14 +271,21 @@ func TestConfigPushGrantsApprovedMemberScopeAccess(t *testing.T) {
 				"public_key_sha":        admin.sha,
 				"signing_public_key":    admin.ssh,
 				"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
-				"role":                  "admins",
+				"management":            true,
+				"scopes": map[string]any{
+					"dev":  "write",
+					"prod": "write",
+				},
 			},
 			map[string]any{
 				"handle":                "bob@example.com",
 				"public_key_sha":        member.sha,
 				"signing_public_key":    member.ssh,
 				"encryption_public_key": "x25519:Ym9iLWVuY3J5cHRpb24tcHVibGljLWtleQ==",
-				"role":                  "developers",
+				"scopes": map[string]any{
+					"dev":  "read",
+					"prod": "read",
+				},
 			},
 		},
 		"pending": map[string]any{"joins": []any{}, "access_changes": []any{}},
@@ -301,7 +300,6 @@ func TestConfigPushGrantsApprovedMemberScopeAccess(t *testing.T) {
 					"type":           "join",
 					"handle":         "bob@example.com",
 					"public_key_sha": member.sha,
-					"role":           "developers",
 				},
 				map[string]any{
 					"type":           "scope_access_change",
@@ -360,10 +358,6 @@ func TestConfigPushRejectsMismatchedSnapshotTeamID(t *testing.T) {
 		"scopes": map[string]any{
 			"dev": map[string]any{
 				"env_files": []any{".env"},
-				"default_role_access": map[string]any{
-					"admins":     "write",
-					"developers": "read",
-				},
 			},
 		},
 		"members": []any{
@@ -372,7 +366,10 @@ func TestConfigPushRejectsMismatchedSnapshotTeamID(t *testing.T) {
 				"public_key_sha":        signer.sha,
 				"signing_public_key":    signer.ssh,
 				"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
-				"role":                  "admins",
+				"management":            true,
+				"scopes": map[string]any{
+					"dev": "write",
+				},
 			},
 		},
 		"pending": map[string]any{"joins": []any{}, "access_changes": []any{}},
@@ -512,7 +509,6 @@ func TestTeamInvitesJoinerListAndPINRedeem(t *testing.T) {
 			"signing_public_key":    joinerSSH,
 			"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
 		},
-		"requested_role": "developers",
 		"requested_scopes": map[string]any{"dev": "read"},
 		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
 	})
@@ -544,7 +540,6 @@ func TestTeamInvitesJoinerListAndPINRedeem(t *testing.T) {
 			"signing_public_key":    joinerSSH,
 			"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
 		},
-		"requested_role":   "developers",
 		"requested_scopes": map[string]any{"dev": "read"},
 		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
 	})
@@ -598,7 +593,6 @@ func TestTeamInvitesPINLocksAfterThreeFailures(t *testing.T) {
 				"signing_public_key":    ssh,
 				"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
 			},
-			"requested_role":   "developers",
 			"requested_scopes": map[string]any{"dev": "read"},
 			"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
 		})
@@ -637,7 +631,6 @@ func TestTeamInvitesPINLocksAfterThreeFailures(t *testing.T) {
 			"signing_public_key":    ssh4,
 			"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
 		},
-		"requested_role":   "developers",
 		"requested_scopes": map[string]any{"dev": "read"},
 		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
 	})
@@ -719,10 +712,6 @@ func setupBody(t *testing.T, signer testSigner, operationID string, includePlain
 			map[string]any{
 				"name":      "dev",
 				"env_files": []any{".env"},
-				"default_role_access": map[string]any{
-					"admins":     "write",
-					"developers": "read",
-				},
 			},
 		},
 		"encrypted_secret_versions": []any{

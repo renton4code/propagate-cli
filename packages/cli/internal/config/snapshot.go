@@ -120,6 +120,8 @@ func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, er
 
 	project.Members = append([]Member(nil), snapshot.Members...)
 	for idx, member := range project.Members {
+		member = NormalizeMemberAccess(member, project.Scopes)
+		project.Members[idx] = member
 		if err := ValidateMember(member); err != nil {
 			return ParsedProject{}, fmt.Errorf("member %d: %w", idx+1, err)
 		}
@@ -128,6 +130,8 @@ func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, er
 
 	project.PendingJoins = append([]JoinRequest(nil), snapshot.Pending.Joins...)
 	for idx, join := range project.PendingJoins {
+		join = NormalizeJoinRequestAccess(join, project.Scopes)
+		project.PendingJoins[idx] = join
 		if err := ValidateJoinRequest(join); err != nil {
 			return ParsedProject{}, fmt.Errorf("pending join %d: %w", idx+1, err)
 		}

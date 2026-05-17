@@ -103,8 +103,10 @@ type StoredSetup struct {
 
 type Member struct {
 	PublicIdentity
-	Role   string `json:"role"`
-	Status string `json:"status"`
+	Role       string            `json:"role,omitempty"`
+	Management bool              `json:"management,omitempty"`
+	Scopes     map[string]string `json:"scopes,omitempty"`
+	Status     string            `json:"status"`
 }
 
 type TeamSummary struct {
@@ -152,6 +154,7 @@ type ConfigDecision struct {
 	PublicKeySHA string `json:"public_key_sha,omitempty"`
 	Scope        string `json:"scope,omitempty"`
 	Role         string `json:"role,omitempty"`
+	Management   bool   `json:"management,omitempty"`
 	Permission   string `json:"permission,omitempty"`
 }
 
@@ -644,6 +647,10 @@ func PermissionAllows(actual string, required string) bool {
 	return permissionRank(actual) >= permissionRank(required)
 }
 
+func MemberCanManage(member Member) bool {
+	return member.Management || member.Role == "admins"
+}
+
 func permissionRank(permission string) int {
 	switch permission {
 	case "admin":
@@ -668,20 +675,20 @@ func ConfigHash(snapshot json.RawMessage) (string, error) {
 
 func CanonicalSetupConfigSnapshot(request TeamSetupRequest, teamID string) (json.RawMessage, string, error) {
 	type canonicalScope struct {
-		EnvFiles          []string              `json:"env_files"`
-		Variables         []VariableDeclaration `json:"variables,omitempty"`
-		DefaultRoleAccess map[string]string     `json:"default_role_access,omitempty"`
+		EnvFiles  []string              `json:"env_files"`
+		Variables []VariableDeclaration `json:"variables,omitempty"`
 	}
 	type canonicalTeam struct {
 		ID   string `json:"id,omitempty"`
 		Name string `json:"name"`
 	}
 	type canonicalMember struct {
-		Handle              string `json:"handle"`
-		PublicKeySHA        string `json:"public_key_sha"`
-		SigningPublicKey    string `json:"signing_public_key"`
-		EncryptionPublicKey string `json:"encryption_public_key"`
-		Role                string `json:"role"`
+		Handle              string            `json:"handle"`
+		PublicKeySHA        string            `json:"public_key_sha"`
+		SigningPublicKey    string            `json:"signing_public_key"`
+		EncryptionPublicKey string            `json:"encryption_public_key"`
+		Management          bool              `json:"management,omitempty"`
+		Scopes              map[string]string `json:"scopes,omitempty"`
 	}
 	type canonicalPending struct {
 		Joins         []any `json:"joins"`
@@ -696,16 +703,13 @@ func CanonicalSetupConfigSnapshot(request TeamSetupRequest, teamID string) (json
 	}
 
 	scopes := map[string]canonicalScope{}
+	adminScopes := map[string]string{}
 	for _, scope := range request.Scopes {
-		access := map[string]string{}
-		for role, permission := range scope.DefaultRoleAccess {
-			access[role] = permission
-		}
 		scopes[scope.Name] = canonicalScope{
-			EnvFiles:          append([]string{}, scope.EnvFiles...),
-			Variables:         append([]VariableDeclaration{}, scope.Variables...),
-			DefaultRoleAccess: access,
+			EnvFiles:  append([]string{}, scope.EnvFiles...),
+			Variables: append([]VariableDeclaration{}, scope.Variables...),
 		}
+		adminScopes[scope.Name] = "write"
 	}
 	snapshot := canonicalSnapshot{
 		Version: 1,
@@ -719,7 +723,8 @@ func CanonicalSetupConfigSnapshot(request TeamSetupRequest, teamID string) (json
 			PublicKeySHA:        request.FirstAdmin.PublicKeySHA,
 			SigningPublicKey:    request.FirstAdmin.SigningPublicKey,
 			EncryptionPublicKey: request.FirstAdmin.EncryptionPublicKey,
-			Role:                "admins",
+			Management:          true,
+			Scopes:              adminScopes,
 		}},
 		Pending: canonicalPending{
 			Joins:         []any{},
@@ -789,11 +794,13 @@ func ValidateConfigSnapshot(raw json.RawMessage) error {
 		} `json:"team"`
 		Scopes  map[string]SetupScope `json:"scopes"`
 		Members []struct {
-			Handle              string `json:"handle"`
-			PublicKeySHA        string `json:"public_key_sha"`
-			SigningPublicKey    string `json:"signing_public_key"`
-			EncryptionPublicKey string `json:"encryption_public_key"`
-			Role                string `json:"role"`
+			Handle              string            `json:"handle"`
+			PublicKeySHA        string            `json:"public_key_sha"`
+			SigningPublicKey    string            `json:"signing_public_key"`
+			EncryptionPublicKey string            `json:"encryption_public_key"`
+			Role                string            `json:"role"`
+			Management          bool              `json:"management"`
+			Scopes              map[string]string `json:"scopes"`
 		} `json:"members"`
 		Pending struct {
 			Joins []struct {
@@ -802,6 +809,7 @@ func ValidateConfigSnapshot(raw json.RawMessage) error {
 				SigningPublicKey    string            `json:"signing_public_key"`
 				EncryptionPublicKey string            `json:"encryption_public_key"`
 				RequestedRole       string            `json:"requested_role"`
+				RequestedManagement bool              `json:"requested_management"`
 				RequestedScopes     map[string]string `json:"requested_scopes"`
 			} `json:"joins"`
 		} `json:"pending"`
@@ -835,10 +843,16 @@ func ValidateConfigSnapshot(raw json.RawMessage) error {
 		}).Validate(); err != nil {
 			return fmt.Errorf("member %d: %w", idx+1, err)
 		}
-		switch member.Role {
-		case "admins", "developers":
-		default:
-			return fmt.Errorf("member %d: unsupported role %q", idx+1, member.Role)
+		if err := ValidateRole(member.Role); err != nil {
+			return fmt.Errorf("member %d: %w", idx+1, err)
+		}
+		for scope, permission := range member.Scopes {
+			if !scopeNamePattern.MatchString(scope) {
+				return fmt.Errorf("member %d: invalid scope %q", idx+1, scope)
+			}
+			if !validPermission(permission) {
+				return fmt.Errorf("member %d: unsupported permission %q", idx+1, permission)
+			}
 		}
 	}
 	for idx, join := range snapshot.Pending.Joins {
@@ -850,10 +864,8 @@ func ValidateConfigSnapshot(raw json.RawMessage) error {
 		}).Validate(); err != nil {
 			return fmt.Errorf("pending join %d: %w", idx+1, err)
 		}
-		switch join.RequestedRole {
-		case "admins", "developers":
-		default:
-			return fmt.Errorf("pending join %d: unsupported requested_role %q", idx+1, join.RequestedRole)
+		if err := ValidateRole(join.RequestedRole); err != nil {
+			return fmt.Errorf("pending join %d: %w", idx+1, err)
 		}
 		for scope, permission := range join.RequestedScopes {
 			if !scopeNamePattern.MatchString(scope) {
@@ -938,7 +950,7 @@ func validPermission(permission string) bool {
 // ValidateRole checks requested Propagate member roles.
 func ValidateRole(role string) error {
 	switch role {
-	case "admins", "developers":
+	case "", "admins", "developers":
 		return nil
 	default:
 		return fmt.Errorf("unsupported role %q", role)

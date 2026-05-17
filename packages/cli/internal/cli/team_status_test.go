@@ -118,7 +118,7 @@ func TestTeamStatusShowsCloudActivity(t *testing.T) {
 	if handlerErr != nil {
 		t.Fatal(handlerErr)
 	}
-	for _, want := range []string{"Team status complete.", "Current role: admins", "Members:", "alice@example.com", "bob@example.com", "Last pulls:", "Never pulled:", "Cloud pending/recent access:"} {
+	for _, want := range []string{"Team status complete.", "Current access: management", "Members:", "alice@example.com", "bob@example.com", "Last pulls:", "Never pulled:", "Cloud pending/recent access:"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, stdout.String())
 		}
@@ -190,7 +190,7 @@ func TestTeamStatusJSONOmitsRawPublicKeys(t *testing.T) {
 			t.Fatalf("team status JSON leaked raw key field/value %q\nstdout:\n%s\nstderr:\n%s", forbidden, stdout.String(), stderr.String())
 		}
 	}
-	if !strings.Contains(stdout.String(), `"current_role": "admins"`) {
+	if !strings.Contains(stdout.String(), `"current_role": "management"`) {
 		t.Fatalf("JSON output missing current role:\n%s", stdout.String())
 	}
 }
@@ -211,7 +211,7 @@ func TestTeamStatusShowsLocalFactsWithoutAPIURL(t *testing.T) {
 	if code != ExitCloudUnavailable {
 		t.Fatalf("team status exit = %d, want %d; stderr:\n%s", code, ExitCloudUnavailable, stderr.String())
 	}
-	for _, want := range []string{"Team local status available", "Team: Acme API", "Current role: admins", "Members:", "Audit available: false"} {
+	for _, want := range []string{"Team local status available", "Team: Acme API", "Current access: management", "Members:", "Audit available: false"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("local output missing %q:\n%s", want, stdout.String())
 		}

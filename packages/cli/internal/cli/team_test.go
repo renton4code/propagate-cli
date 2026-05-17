@@ -54,7 +54,6 @@ func TestTeamJoinAddsPendingRequest(t *testing.T) {
 		`public_key_sha: "sha256:`,
 		`signing_public_key: "ssh-ed25519 `,
 		`encryption_public_key: "x25519:`,
-		`requested_role: developers`,
 		`requested_scopes:`,
 		`dev: read`,
 	} {
@@ -167,6 +166,47 @@ func TestTeamJoinGuidanceFlagsRequireInit(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "require --init") {
 		t.Fatalf("expected --init requirement error, got:\n%s", stderr.String())
+	}
+}
+
+func TestTeamRoleFlagIsRemoved(t *testing.T) {
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+	workDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"team", "join",
+		"--role", "developers",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: workDir,
+	})
+	if code != ExitUsageError {
+		t.Fatalf("team join --role exit = %d, want %d; stderr:\n%s", code, ExitUsageError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("expected removed --role flag error, got:\n%s", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{
+		"team", "invite",
+		"--label", "Bob",
+		"--role", "developers",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: workDir,
+	})
+	if code != ExitUsageError {
+		t.Fatalf("team invite --role exit = %d, want %d; stderr:\n%s", code, ExitUsageError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("expected removed invite --role flag error, got:\n%s", stderr.String())
 	}
 }
 

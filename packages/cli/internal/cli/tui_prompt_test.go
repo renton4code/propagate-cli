@@ -51,6 +51,40 @@ func TestTextPromptModelRequiresValue(t *testing.T) {
 	}
 }
 
+func TestMultiChoicePromptModelTogglesAndSubmitsSelection(t *testing.T) {
+	model := newMultiChoicePromptModel("Pick", nil, []tuiMultiChoice{
+		{Label: "One", Value: "one", Selected: true},
+		{Label: "Two", Value: "two", Selected: true},
+	}, true)
+
+	updated, _ := model.Update(keyRune(' '))
+	updated, _ = updated.(multiChoicePromptModel).Update(tea.KeyMsg{Type: tea.KeyDown})
+	final, _ := updated.(multiChoicePromptModel).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := final.(multiChoicePromptModel)
+	if !got.submitted || len(got.selected) != 1 || got.selected[0] != "two" {
+		t.Fatalf("selected = %+v submitted=%v, want only two submitted", got.selected, got.submitted)
+	}
+}
+
+func TestMultiChoicePromptModelRequiresSelection(t *testing.T) {
+	model := newMultiChoicePromptModel("Pick", nil, []tuiMultiChoice{
+		{Label: "One", Value: "one"},
+	}, true)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	empty := updated.(multiChoicePromptModel)
+	if empty.submitted || empty.errText == "" {
+		t.Fatalf("empty submit submitted=%v err=%q, want validation error", empty.submitted, empty.errText)
+	}
+
+	updated, _ = empty.Update(keyRune(' '))
+	final, _ := updated.(multiChoicePromptModel).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := final.(multiChoicePromptModel)
+	if !got.submitted || len(got.selected) != 1 || got.selected[0] != "one" {
+		t.Fatalf("selected = %+v submitted=%v, want one submitted", got.selected, got.submitted)
+	}
+}
+
 func keyRune(r rune) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
 }

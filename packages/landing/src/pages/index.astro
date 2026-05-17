@@ -8,7 +8,7 @@ import type { TerminalDef } from "../components/TerminalFlow";
 const terminals: TerminalDef[] = [
   {
     step: "01",
-    label: "Admin sets up the project",
+    label: "Management member sets up project",
     user: "maya@acme",
     dir: "~/my-project",
     lines: [
@@ -32,7 +32,7 @@ const terminals: TerminalDef[] = [
   },
   {
     step: "02",
-    label: "Admin creates an invite",
+    label: "Management member creates invite",
     user: "maya@acme",
     dir: "~/my-project",
     lines: [
@@ -117,7 +117,7 @@ const features = [
     icon: "👥",
     title: "Team access control",
     description:
-      "Invite teammates by public key. Assign roles and environment scopes. Review membership changes in Git like any other code.",
+      "Invite teammates by public key. Grant read or write per environment, and separate config management from secret access.",
   },
   {
     icon: "📄",
@@ -290,21 +290,22 @@ const features = [
         <span style="color:#FFE500">env_file_path</span><span style="color:#888">:</span> <span style="color:#fff">".env"</span>
         <span style="color:#FFE500">sensitivity</span><span style="color:#888">:</span> <span style="color:#fff">sensitive</span>
         <span style="color:#FFE500">digest</span><span style="color:#888">:</span> <span style="color:#fff">"hmac-sha-256:v1:..."</span>
-    <span style="color:#FFE500">default_role_access</span><span style="color:#888">:</span>
-      <span style="color:#FFE500">developers</span><span style="color:#888">:</span> <span style="color:#fff">read</span>
-      <span style="color:#FFE500">admins</span><span style="color:#888">:</span> <span style="color:#fff">write</span>
 
 <span style="color:#FFE500">members</span><span style="color:#888">:</span>
   <span style="color:#888">-</span> <span style="color:#FFE500">handle</span><span style="color:#888">:</span> <span style="color:#fff">"maya@acme.com"</span>
     <span style="color:#FFE500">public_key_sha</span><span style="color:#888">:</span> <span style="color:#fff">"sha256:8f96..."</span>
     <span style="color:#FFE500">signing_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"ssh-ed25519 AAAA..."</span>
     <span style="color:#FFE500">encryption_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"x25519:..."</span>
-    <span style="color:#FFE500">role</span><span style="color:#888">:</span> <span style="color:#fff">admins</span>
+    <span style="color:#FFE500">management</span><span style="color:#888">:</span> <span style="color:#fff">true</span>
+    <span style="color:#FFE500">scopes</span><span style="color:#888">:</span>
+      <span style="color:#FFE500">dev</span><span style="color:#888">:</span> <span style="color:#fff">write</span>
+      <span style="color:#FFE500">prod</span><span style="color:#888">:</span> <span style="color:#fff">write</span>
   <span style="color:#888">-</span> <span style="color:#FFE500">handle</span><span style="color:#888">:</span> <span style="color:#fff">"sarah@acme.com"</span>
     <span style="color:#FFE500">public_key_sha</span><span style="color:#888">:</span> <span style="color:#fff">"sha256:264c..."</span>
     <span style="color:#FFE500">signing_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"ssh-ed25519 AAAA..."</span>
     <span style="color:#FFE500">encryption_public_key</span><span style="color:#888">:</span> <span style="color:#fff">"x25519:..."</span>
-    <span style="color:#FFE500">role</span><span style="color:#888">:</span> <span style="color:#fff">developers</span>
+    <span style="color:#FFE500">scopes</span><span style="color:#888">:</span>
+      <span style="color:#FFE500">dev</span><span style="color:#888">:</span> <span style="color:#fff">read</span>
 
 <span style="color:#FFE500">pending</span><span style="color:#888">:</span>
   <span style="color:#FFE500">joins</span><span style="color:#888">:</span> <span style="color:#fff">[]</span>

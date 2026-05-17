@@ -151,7 +151,7 @@ func prepareProcessEnv(opts processRunOptions, streams Streams, reader *bufio.Re
 		return decryptedProcessEnv{}, commandError(ExitValidationError, "validation_failed", "Cloud returned a pull bundle for a different scope", fmt.Errorf("requested %s, received %s", scopeName, bundle.Scope.Name))
 	}
 	if bundle.ScopeKeyEnvelope.RecipientKeySHA != "" && bundle.ScopeKeyEnvelope.RecipientKeySHA != ident.PublicKeySHA {
-		return decryptedProcessEnv{}, commandError(ExitPermissionDenied, "permission_denied", fmt.Sprintf("No readable scope key envelope was returned for scope %q", scopeName), nil, "Ask a Propagate admin to approve access and run `propagate config push`.")
+		return decryptedProcessEnv{}, commandError(ExitPermissionDenied, "permission_denied", fmt.Sprintf("No readable scope key envelope was returned for scope %q", scopeName), nil, "Ask a Propagate management member to approve access and run `propagate config push`.")
 	}
 
 	scopeKey, err := secretcrypto.DecryptScopeKey(
@@ -163,7 +163,7 @@ func prepareProcessEnv(opts processRunOptions, streams Streams, reader *bufio.Re
 		bundle.ScopeKeyEnvelope.ScopeKeyVersion,
 	)
 	if err != nil {
-		return decryptedProcessEnv{}, commandError(ExitPermissionDenied, "scope_key_decrypt_failed", fmt.Sprintf("Cannot decrypt the scope key envelope for scope %q", scopeName), err, "No process was started.", "Ask a Propagate admin to refresh your access envelope.")
+		return decryptedProcessEnv{}, commandError(ExitPermissionDenied, "scope_key_decrypt_failed", fmt.Sprintf("Cannot decrypt the scope key envelope for scope %q", scopeName), err, "No process was started.", "Ask a Propagate management member to refresh your access envelope.")
 	}
 
 	valuesByFile, err := decryptPullValues(project.TeamID, scopeName, scopeKey, bundle.SecretVersions)
@@ -308,7 +308,7 @@ func mapProcessRunAPIError(err error, scope string, ident identity.Summary) erro
 			fmt.Sprintf("Cannot inject env values for scope %q with identity %s", scope, ident.PublicKeySHA),
 			apiErr,
 			"No process was started.",
-			"Commit a `propagate team join` request or ask a Propagate admin to grant read access for this scope.",
+			"Commit a `propagate team join` request or ask a Propagate management member to grant read access for this scope.",
 		)
 	case "team_not_found", "scope_not_found":
 		return commandError(ExitValidationError, apiErr.Code, "The requested team or scope was not found in the cloud", apiErr, "Run `propagate config pull` if the local config is stale.")

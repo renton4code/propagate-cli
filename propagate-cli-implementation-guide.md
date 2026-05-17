@@ -69,7 +69,7 @@ Local identity is stored under `~/.propagate`. The CLI should support one defaul
 | `public_key_sha` | Stable identity ID derived from canonical signing public key |
 | `signing_public_key` | Public key used by the server to verify requests |
 | `signing_private_key` | Local private key used to sign API requests |
-| `encryption_public_key` | Recipient key used by admins to encrypt scope keys |
+| `encryption_public_key` | Recipient key used when granting scope access |
 | `encryption_private_key` | Local private key used to decrypt scope key envelopes |
 | `created_at` | Local identity creation timestamp |
 | `format_version` | Local identity file version |
@@ -105,8 +105,8 @@ Top-level logical fields:
 | --- | --- |
 | `version` | Config format version |
 | `team` | Team ID, team name, cloud revision |
-| `scopes` | Scope names, env file mappings, variable declarations, default role access |
-| `members` | Active members and public identity material |
+| `scopes` | Scope names, env file mappings, variable declarations |
+| `members` | Active members, public identity material, management bit, and per-scope permissions |
 | `pending` | Join requests and access-change requests |
 | `history` | Optional local non-secret resolution metadata |
 
@@ -127,8 +127,8 @@ Canonical values:
 
 | Type | Values |
 | --- | --- |
-| Role | `admins`, `developers` |
-| Permission | `none`, `read`, `write`, `admin` |
+| Management | `true` grants config-management actions such as approving joins and pushing config |
+| Scope permission | `none`, `read`, `write`, `admin` |
 | Built-in scope | `dev`, `staging`, `prod`, `other` |
 | Member status | `active`, `revoked`, `replaced` |
 | Pending decision | `approve`, `decline`, `skip` |
@@ -335,8 +335,8 @@ Inputs:
 
 | Input | Required | Notes |
 | --- | --- | --- |
-| Requested role | Optional | Defaults to `developers` |
-| Requested scopes | Optional | Defaults to configured developer default |
+| Requested management | Optional | Defaults to false; `--management` requests config-management access |
+| Requested scopes | Optional | Defaults to `dev=read` when a `dev` scope exists |
 | Handle | Required if identity/profile missing handle | Prompt or use existing profile |
 | Join mode (planned) | Required when non-interactive and invites exist | Exact flags TBD |
 
@@ -361,10 +361,10 @@ Success result:
 | --- | --- |
 | `pending_join_added` | True when a new request was added |
 | `public_key_sha` | Current identity |
-| `requested_role` | Requested role |
+| `requested_management` | Whether config-management access was requested |
 | `requested_scopes` | Requested scope permissions |
 | `join_mode` | `git_mediated` or `invite_code` when tracked (planned) |
-| `next_steps` | Commit config diff, open PR, ask admin to run config push |
+| `next_steps` | Commit config diff, open PR, ask a management member to run config push |
 
 Failure behavior:
 
@@ -377,18 +377,18 @@ Failure behavior:
 
 ### 6.2.1 `propagate team invite` (planned)
 
-Purpose: allow **admins** to mint **PIN-backed invites** that label an expected joiner and gate the usual Git-mediated `propagate team join` pending entry.
+Purpose: allow **management members** to mint **PIN-backed invites** that label an expected joiner and gate the usual Git-mediated `propagate team join` pending entry.
 
 Inputs:
 
 | Input | Required | Notes |
 | --- | --- | --- |
 | Invite label | Yes | Free-text display name for joiner selection lists |
-| Default role/scopes | Optional | Same semantics as `team join` when not overridden by joiner flags |
+| Default management/scopes | Optional | Same semantics as `team join` when not overridden by joiner flags |
 
 Local reads:
 
-- Local identity (admin)
+- Local identity with management access
 - `propagate.yaml`
 
 Local writes:
@@ -397,17 +397,17 @@ Local writes:
 
 API calls:
 
-- `POST /v1/teams/{team_id}/invites` (create; signed, admin-only)
-- `GET /v1/teams/{team_id}/invites` (admin list)
+- `POST /v1/teams/{team_id}/invites` (create; signed, management-only)
+- `GET /v1/teams/{team_id}/invites` (management list)
 - `DELETE` or `POST .../revoke` for revoke (exact shape TBD)
 
 Success result (create):
 
 | Field | Meaning |
 | --- | --- |
-| `invite_id` | Opaque id for admin/joiner correlation |
+| `invite_id` | Opaque id for management/joiner correlation |
 | `pin` | Returned **once** for terminal display only |
-| `label` | Echo of admin label |
+| `label` | Echo of management-entered label |
 | `expires_at` | If TTL is enabled |
 
 Join-side API calls (see API guide):
@@ -417,7 +417,7 @@ Join-side API calls (see API guide):
 
 Failure behavior:
 
-- Reject create if actor is not admin
+- Reject create if actor lacks management access
 - Never log or persist plaintext PIN server-side beyond the initial response payload over TLS
 
 ### 6.3 `propagate config status`
@@ -501,7 +501,7 @@ Failure behavior:
 
 ### 6.5 `propagate config push`
 
-Purpose: push admin-approved config decisions to the cloud and update local config to match decisions.
+Purpose: push management-approved config decisions to the cloud and update local config to match decisions.
 
 Inputs:
 
@@ -520,7 +520,7 @@ Local reads:
 API calls:
 
 - `GET /v1/teams/{team_id}/config/status`
-- `GET /v1/teams/{team_id}/scopes/{scope}/key-envelope` or pull bundle equivalent when admin needs current scope keys
+- `GET /v1/teams/{team_id}/scopes/{scope}/key-envelope` or pull bundle equivalent when a management client needs current scope keys
 - `POST /v1/teams/{team_id}/config/push`
 
 Local writes:
@@ -542,9 +542,9 @@ Success result:
 
 Failure behavior:
 
-- Non-admins may view diffs but cannot push privileged changes.
+- Members without management access may view diffs but cannot push privileged changes.
 - If cloud revision differs, return conflict and do not upload changes.
-- If admin cannot decrypt required scope key, fail only the affected approval path and require a new decision.
+- If the approving member cannot decrypt a required scope key, fail only the affected approval path and require a new decision.
 - If cloud push succeeds but local config write fails, return exit code 9 with recovery instructions.
 
 ### 6.6 `propagate env pull`
@@ -816,8 +816,8 @@ Success result:
 | Field | Meaning |
 | --- | --- |
 | `team` | Team name, ID, revisions |
-| `current_identity` | Handle, public key SHA, role |
-| `members` | Members grouped by role |
+| `current_identity` | Handle, public key SHA, management bit, scope permissions |
+| `members` | Members grouped by management vs non-management access |
 | `pending` | Pending local config requests |
 | `last_pulls` | Last pull by member and scope |
 | `never_pulled` | Members with no pull activity |
@@ -898,10 +898,10 @@ Common error payload:
 | Endpoint | Used By | Responsibility |
 | --- | --- | --- |
 | `GET /v1/version` | All commands | API compatibility and server version |
-| `POST /v1/teams/setup` | `init` | Create team, first admin, scopes, encrypted initial values, envelopes |
+| `POST /v1/teams/setup` | `init` | Create team, first management member, scopes, encrypted initial values, envelopes |
 | `GET /v1/teams/{team_id}/config/status` | `config status`, `config push` | Return revision/hash comparison metadata |
 | `GET /v1/teams/{team_id}/config` | `config pull` | Return current normalized config snapshot |
-| `POST /v1/teams/{team_id}/config/push` | `config push` | Apply admin-approved config decisions and envelopes |
+| `POST /v1/teams/{team_id}/config/push` | `config push` | Apply management-approved config decisions and envelopes |
 | `GET /v1/teams/{team_id}/scopes/{scope}/key-envelope` | `config push` | Return the actor's active encrypted scope key envelope for approval/envelope creation |
 | `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle` | `env pull`, `run`, `env push`, `env set` | Return active envelope and encrypted current values |
 | `POST /v1/teams/{team_id}/scopes/{scope}/env/push` | `env push`, `env set` | Apply encrypted upserts/removals, including single-value updates, with version checks |
@@ -929,11 +929,11 @@ Server behavior:
 
 Request responsibilities:
 
-- Include first admin public identity material.
+- Include first management member public identity material.
 - Include normalized config snapshot with safe variable declarations.
 - Include scopes and env file mappings.
 - Include encrypted initial secret versions.
-- Include first admin encrypted scope key envelopes.
+- Include first management member encrypted scope key envelopes.
 - Include operation ID.
 
 Response responsibilities:
@@ -1006,7 +1006,7 @@ Server behavior:
 
 - Verify signature.
 - Reserve replay nonce.
-- Verify active admin permission.
+- Verify active management permission.
 - Verify expected revision.
 - Enforce idempotency by operation ID.
 - Apply decisions transactionally through stored functions.
@@ -1115,7 +1115,7 @@ Response responsibilities:
 - Return pending/recent access metadata.
 - Return last pull per member/scope.
 - Return members who have never pulled.
-- Return current actor role.
+- Return current actor management bit and scope permissions.
 
 Server behavior:
 
@@ -1188,7 +1188,7 @@ Error messages should not:
 | Env pull wrote some files and then failed | Atomic writes should prevent partial files; report exact files updated or unchanged |
 | Env push conflict | Pull latest, review diff, retry push |
 | Lost private key | Create new identity and submit join request |
-| Admin cannot decrypt scope key | Another admin with access must approve or recover scope key; do not fabricate a new key silently |
+| Approver cannot decrypt scope key | Another management member with access must approve or recover scope key; do not fabricate a new key silently |
 
 ## 9. Testing Plan
 
@@ -1237,10 +1237,10 @@ Required coverage:
 
 Recommended integration flows:
 
-- First admin setup with one `.env`.
+- First management member setup with one `.env`.
 - Existing project `init` path with agent guidance offer.
 - Developer join request.
-- Admin config push approving join.
+- Management config push approving join.
 - Env pull into missing local file.
 - Env pull with existing unrelated variables.
 - Env push added/changed/removed variables.

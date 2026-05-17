@@ -17,10 +17,10 @@ import (
 
 type teamInviteOptions struct {
 	globalOptions
-	Label           string
-	RequestedRole   string
-	RequestedScopes scopeFlags
-	DryRun          bool
+	Label               string
+	RequestedManagement bool
+	RequestedScopes     scopeFlags
+	DryRun              bool
 }
 
 // TeamInviteCreateResult is JSON output for `propagate team invite`.
@@ -55,12 +55,12 @@ func runTeamInviteCommand(args []string, global globalOptions, streams Streams) 
 }
 
 func runTeamInviteCreate(args []string, global globalOptions, streams Streams) int {
-	opts := teamInviteOptions{globalOptions: global, RequestedRole: "developers"}
+	opts := teamInviteOptions{globalOptions: global}
 	fs := flag.NewFlagSet("team invite", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addGlobalFlags(fs, &opts.globalOptions)
 	fs.StringVar(&opts.Label, "label", "", "human-readable name for this invite (required)")
-	fs.StringVar(&opts.RequestedRole, "role", opts.RequestedRole, "default requested role for redeeming joiners")
+	fs.BoolVar(&opts.RequestedManagement, "management", false, "default management request for redeeming joiners")
 	fs.Var(&opts.RequestedScopes, "scope", "default scope permission scope=perm; may be repeated")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate locally without calling the API")
 
@@ -107,9 +107,6 @@ func runTeamInviteCreateExec(opts teamInviteOptions, streams Streams) (TeamInvit
 	label := strings.TrimSpace(opts.Label)
 	if label == "" {
 		return TeamInviteCreateResult{}, commandError(ExitUsageError, "usage_error", "--label is required", nil)
-	}
-	if err := config.ValidateRole(opts.RequestedRole); err != nil {
-		return TeamInviteCreateResult{}, commandError(ExitUsageError, "usage_error", "Invalid role", err)
 	}
 	scopes, err := opts.RequestedScopes.Map()
 	if err != nil {
@@ -163,11 +160,11 @@ func runTeamInviteCreateExec(opts teamInviteOptions, streams Streams) (TeamInvit
 		return TeamInviteCreateResult{}, err
 	}
 	req := apiclient.CreateTeamInviteRequest{
-		OperationID:     opID,
-		Label:           label,
-		RequestedRole:   opts.RequestedRole,
-		RequestedScopes: scopes,
-		Client:          apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
+		OperationID:         opID,
+		Label:               label,
+		RequestedManagement: opts.RequestedManagement,
+		RequestedScopes:     scopes,
+		Client:              apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
 	}
 	client := apiclient.Client{BaseURL: apiURL, HTTPClient: configPushHTTPClient, CLIVersion: Version}
 	created, err := client.CreateTeamInvite(context.Background(), ident, project.TeamID, req)
@@ -276,7 +273,7 @@ func runTeamInviteRevoke(args []string, global globalOptions, streams Streams) i
 
 func printTeamInviteHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  propagate team invite --label TEXT [flags]   create a PIN invite (admin)")
-	fmt.Fprintln(w, "  propagate team invite list [flags]            list invites (admin)")
-	fmt.Fprintln(w, "  propagate team invite revoke INVITE_ID        revoke an active invite (admin)")
+	fmt.Fprintln(w, "  propagate team invite --label TEXT [flags]   create a PIN invite (management)")
+	fmt.Fprintln(w, "  propagate team invite list [flags]            list invites (management)")
+	fmt.Fprintln(w, "  propagate team invite revoke INVITE_ID        revoke an active invite (management)")
 }

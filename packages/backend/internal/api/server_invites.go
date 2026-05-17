@@ -124,8 +124,8 @@ func (s *Server) handleAdminInviteCreate(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	if actor.Role != "admins" {
-		s.writeError(w, requestID, request.OperationID, newAPIError(http.StatusForbidden, "permission_denied", "admin role is required"))
+	if !domain.MemberCanManage(actor) {
+		s.writeError(w, requestID, request.OperationID, newAPIError(http.StatusForbidden, "permission_denied", "management access is required"))
 		return
 	}
 	result, err := s.store.CreateTeamInvite(r.Context(), teamID, actor, request)
@@ -145,8 +145,8 @@ func (s *Server) handleAdminInvitesList(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	if actor.Role != "admins" {
-		s.writeError(w, requestID, "", newAPIError(http.StatusForbidden, "permission_denied", "admin role is required"))
+	if !domain.MemberCanManage(actor) {
+		s.writeError(w, requestID, "", newAPIError(http.StatusForbidden, "permission_denied", "management access is required"))
 		return
 	}
 	data, err := s.store.ListAdminInvites(r.Context(), teamID, actor)
@@ -171,8 +171,8 @@ func (s *Server) handleAdminInviteRevoke(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	if actor.Role != "admins" {
-		s.writeError(w, requestID, "", newAPIError(http.StatusForbidden, "permission_denied", "admin role is required"))
+	if !domain.MemberCanManage(actor) {
+		s.writeError(w, requestID, "", newAPIError(http.StatusForbidden, "permission_denied", "management access is required"))
 		return
 	}
 	if err := s.store.RevokeTeamInvite(r.Context(), teamID, inviteID, actor); err != nil {

@@ -197,7 +197,7 @@ func (s *Server) verifySetupSignature(r *http.Request, body []byte, request doma
 		return newAPIError(http.StatusUnauthorized, "signature_missing", err.Error())
 	}
 	if metadata.PublicKeySHA != request.FirstAdmin.PublicKeySHA {
-		return newAPIError(http.StatusUnauthorized, "signature_invalid", "signature public key SHA does not match first admin")
+		return newAPIError(http.StatusUnauthorized, "signature_invalid", "signature public key SHA does not match first management member")
 	}
 	timestamp, err := time.Parse(time.RFC3339, metadata.Timestamp)
 	if err != nil {
@@ -212,7 +212,7 @@ func (s *Server) verifySetupSignature(r *http.Request, body []byte, request doma
 
 	publicKey, err := signing.ParseOpenSSHEd25519PublicKey(request.FirstAdmin.SigningPublicKey)
 	if err != nil {
-		return newAPIError(http.StatusUnauthorized, "signature_invalid", "first admin signing public key is invalid")
+		return newAPIError(http.StatusUnauthorized, "signature_invalid", "first management member signing public key is invalid")
 	}
 	canonical := signing.Canonical(r.Method, r.URL.Path, r.URL.RawQuery, body, metadata)
 	if err := signing.Verify(publicKey, canonical, metadata.Signature); err != nil {

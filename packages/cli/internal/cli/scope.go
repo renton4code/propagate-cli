@@ -22,19 +22,19 @@ type scopeCreateOptions struct {
 type envFileFlags []string
 
 type ScopeCreateResult struct {
-	OK                bool              `json:"ok"`
-	Command           string            `json:"command"`
-	Status            string            `json:"status"`
-	DryRun            bool              `json:"dry_run"`
-	ProjectConfigPath string            `json:"project_config_path"`
-	TeamID            string            `json:"team_id"`
-	TeamName          string            `json:"team_name"`
-	Scope             string            `json:"scope"`
-	EnvFiles          []string          `json:"env_files"`
-	DefaultRoleAccess map[string]string `json:"default_role_access"`
-	ConfigModified    bool              `json:"config_modified"`
-	Warnings          []string          `json:"warnings,omitempty"`
-	NextSteps         []string          `json:"next_steps,omitempty"`
+	OK                bool     `json:"ok"`
+	Command           string   `json:"command"`
+	Status            string   `json:"status"`
+	DryRun            bool     `json:"dry_run"`
+	ProjectConfigPath string   `json:"project_config_path"`
+	TeamID            string   `json:"team_id"`
+	TeamName          string   `json:"team_name"`
+	Scope             string   `json:"scope"`
+	EnvFiles          []string `json:"env_files"`
+	ManagementGrants  []string `json:"management_grants,omitempty"`
+	ConfigModified    bool     `json:"config_modified"`
+	Warnings          []string `json:"warnings,omitempty"`
+	NextSteps         []string `json:"next_steps,omitempty"`
 }
 
 func runScopeCommand(args []string, global globalOptions, streams Streams) int {
@@ -139,13 +139,12 @@ func runScopeCreate(name string, opts scopeCreateOptions, streams Streams) (Scop
 	}
 
 	result := ScopeCreateResult{
-		OK:                true,
-		Command:           "scope create",
-		Status:            "success",
-		DryRun:            opts.DryRun,
-		Scope:             scopeName,
-		EnvFiles:          envFiles,
-		DefaultRoleAccess: defaultRoleAccess(scopeName),
+		OK:       true,
+		Command:  "scope create",
+		Status:   "success",
+		DryRun:   opts.DryRun,
+		Scope:    scopeName,
+		EnvFiles: envFiles,
 	}
 
 	worktree, err := gitutil.Discover(streams.WorkDir)
@@ -174,10 +173,20 @@ func runScopeCreate(name string, opts scopeCreateOptions, streams Streams) (Scop
 
 	target := cloneParsedProjectForConfigEdit(project)
 	target.Scopes = append(target.Scopes, config.ScopeSummary{
-		Name:              scopeName,
-		EnvFiles:          envFiles,
-		DefaultRoleAccess: defaultRoleAccess(scopeName),
+		Name:     scopeName,
+		EnvFiles: envFiles,
 	})
+	for idx := range target.Members {
+		if !config.MemberCanManage(target.Members[idx]) {
+			continue
+		}
+		if target.Members[idx].Scopes == nil {
+			target.Members[idx].Scopes = map[string]string{}
+		}
+		target.Members[idx].Scopes[scopeName] = "write"
+		result.ManagementGrants = append(result.ManagementGrants, memberLabel(target.Members[idx].Handle, target.Members[idx].PublicKeySHA))
+	}
+	sort.Strings(result.ManagementGrants)
 
 	rendered, err := config.RenderParsed(target)
 	if err != nil {
@@ -277,9 +286,11 @@ func renderScopeCreateResult(w io.Writer, jsonOutput bool, noColor bool, result 
 			fmt.Fprintf(w, "  - %s\n", path)
 		}
 	}
-	fmt.Fprintln(w, "Default access:")
-	for _, role := range sortedJoinScopes(result.DefaultRoleAccess) {
-		fmt.Fprintf(w, "  - %s: %s\n", role, result.DefaultRoleAccess[role])
+	if len(result.ManagementGrants) > 0 {
+		fmt.Fprintln(w, "Management members granted write:")
+		for _, member := range result.ManagementGrants {
+			fmt.Fprintf(w, "  - %s\n", member)
+		}
 	}
 	fmt.Fprintf(w, "propagate.yaml modified: %t\n", result.ConfigModified)
 	renderWarnings(w, style, result.Warnings)

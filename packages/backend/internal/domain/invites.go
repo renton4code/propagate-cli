@@ -6,11 +6,12 @@ import (
 )
 
 type CreateTeamInviteRequest struct {
-	OperationID     string            `json:"operation_id"`
-	Label             string            `json:"label"`
-	RequestedRole     string            `json:"requested_role,omitempty"`
-	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
-	Client            ClientMetadata    `json:"client,omitempty"`
+	OperationID         string            `json:"operation_id"`
+	Label               string            `json:"label"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	Client              ClientMetadata    `json:"client,omitempty"`
 }
 
 func (r CreateTeamInviteRequest) Validate() error {
@@ -58,13 +59,13 @@ type JoinerInvitesData struct {
 }
 
 type AdminInviteRow struct {
-	InviteID           string `json:"invite_id"`
-	Label              string `json:"label"`
-	Status             string `json:"status"`
-	FailedPINAttempts  int    `json:"failed_pin_attempts"`
-	CreatedAt          string `json:"created_at"`
-	RedeemedAt         string `json:"redeemed_at,omitempty"`
-	RedeemedByKeySHA   string `json:"redeemed_by_key_sha,omitempty"`
+	InviteID          string `json:"invite_id"`
+	Label             string `json:"label"`
+	Status            string `json:"status"`
+	FailedPINAttempts int    `json:"failed_pin_attempts"`
+	CreatedAt         string `json:"created_at"`
+	RedeemedAt        string `json:"redeemed_at,omitempty"`
+	RedeemedByKeySHA  string `json:"redeemed_by_key_sha,omitempty"`
 }
 
 type AdminInvitesData struct {
@@ -72,13 +73,14 @@ type AdminInvitesData struct {
 }
 
 type InvitePINRequest struct {
-	OperationID     string            `json:"operation_id"`
-	PIN             string            `json:"pin"`
-	Joiner          PublicIdentity    `json:"joiner"`
-	Handle          string            `json:"handle"`
-	RequestedRole   string            `json:"requested_role,omitempty"`
-	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
-	Client          ClientMetadata    `json:"client,omitempty"`
+	OperationID         string            `json:"operation_id"`
+	PIN                 string            `json:"pin"`
+	Joiner              PublicIdentity    `json:"joiner"`
+	Handle              string            `json:"handle"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	Client              ClientMetadata    `json:"client,omitempty"`
 }
 
 func (r InvitePINRequest) Validate() error {

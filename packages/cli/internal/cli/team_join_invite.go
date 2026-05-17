@@ -161,13 +161,13 @@ func resolveInviteJoinIfNeeded(streams Streams, opts *teamJoinOptions, teamID st
 		EncryptionPublicKey: summary.EncryptionPublicKey,
 	}
 	pinReq := apiclient.InvitePINRequest{
-		OperationID:     opID,
-		PIN:             pin,
-		Joiner:          joiner,
-		Handle:          summary.Handle,
-		RequestedRole:   opts.RequestedRole,
-		RequestedScopes: requestedScopes,
-		Client:          apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
+		OperationID:         opID,
+		PIN:                 pin,
+		Joiner:              joiner,
+		Handle:              summary.Handle,
+		RequestedManagement: opts.RequestedManagement,
+		RequestedScopes:     requestedScopes,
+		Client:              apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
 	}
 	pinRes, err := client.SubmitInvitePIN(context.Background(), ident, teamID, inviteID, pinReq)
 	if err != nil {

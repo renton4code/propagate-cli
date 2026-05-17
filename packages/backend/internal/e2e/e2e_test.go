@@ -212,8 +212,8 @@ func TestSequentialCLIAPIWithSupabaseDB(t *testing.T) {
 		requireNotContains(t, configText, eve.PublicKeySHA)
 
 		status := h.teamStatus(repo, admin)
-		if !memberInRole(status.Members, "developers", bob.PublicKeySHA) {
-			t.Fatalf("team status did not show approved developer:\n%+v", status)
+		if !memberInRole(status.Members, "members", bob.PublicKeySHA) {
+			t.Fatalf("team status did not show approved member:\n%+v", status)
 		}
 		if status.PendingJoinsCount != 1 || !pendingJoinExists(status.PendingJoins, charlie.PublicKeySHA) {
 			t.Fatalf("team status did not retain skipped join locally:\n%+v", status)
@@ -259,8 +259,8 @@ func TestSequentialCLIAPIWithSupabaseDB(t *testing.T) {
 		requireNotContains(t, envText, "REMOVE_ME="+removedSecret)
 
 		status := h.teamStatus(repo, admin)
-		if !memberInRole(status.Members, "developers", bob.PublicKeySHA) {
-			t.Fatalf("team status did not retain approved developer:\n%+v", status)
+		if !memberInRole(status.Members, "members", bob.PublicKeySHA) {
+			t.Fatalf("team status did not retain approved member:\n%+v", status)
 		}
 		if !pullActivityExists(status.LastPulls, bob.PublicKeySHA, "dev") {
 			t.Fatalf("team status did not record Bob's dev pull:\n%+v", status)

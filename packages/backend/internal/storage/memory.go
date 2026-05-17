@@ -49,17 +49,18 @@ type memoryTeam struct {
 }
 
 type memoryInvite struct {
-	id               string
-	label            string
-	pinVerifier      []byte
-	status           string
-	failedAttempts   int
-	requestedRole    string
-	requestedScopes  map[string]string
-	createdBy        string
-	createdAt        time.Time
-	redeemedAt       time.Time
-	redeemedByKeySHA string
+	id                  string
+	label               string
+	pinVerifier         []byte
+	status              string
+	failedAttempts      int
+	requestedRole       string
+	requestedManagement bool
+	requestedScopes     map[string]string
+	createdBy           string
+	createdAt           time.Time
+	redeemedAt          time.Time
+	redeemedByKeySHA    string
 }
 
 type memoryScope struct {
@@ -157,6 +158,8 @@ func (s *MemoryStore) CreateTeamSetup(_ context.Context, request domain.TeamSetu
 	team.members[request.FirstAdmin.PublicKeySHA] = domain.Member{
 		PublicIdentity: request.FirstAdmin,
 		Role:           "admins",
+		Management:     true,
+		Scopes:         setupMemberScopes(request.Scopes),
 		Status:         "active",
 	}
 
@@ -170,6 +173,9 @@ func (s *MemoryStore) CreateTeamSetup(_ context.Context, request domain.TeamSetu
 			envelopes:    map[string]domain.ScopeKeyEnvelope{},
 			variables:    map[string]*memoryVariable{},
 		}
+	}
+	for _, scope := range team.scopes {
+		scope.memberAccess[request.FirstAdmin.PublicKeySHA] = "write"
 	}
 
 	for _, envelope := range request.ScopeKeyEnvelopes {
@@ -320,7 +326,7 @@ func (s *MemoryStore) PushConfig(_ context.Context, teamID string, actor domain.
 	if err != nil {
 		return domain.ConfigPushResult{}, err
 	}
-	if actor.Role != "admins" {
+	if !domain.MemberCanManage(actor) {
 		return domain.ConfigPushResult{}, ErrPermissionDenied
 	}
 	if existing, ok := team.configOps[request.OperationID]; ok {
@@ -597,9 +603,12 @@ func (s *MemoryStore) TeamStatus(_ context.Context, teamID string, actor domain.
 	if err != nil {
 		return domain.TeamStatusData{}, err
 	}
+	actor = team.members[actor.PublicKeySHA]
+	actor.Scopes = memberScopes(team, actor.PublicKeySHA)
 	membersByRole := map[string][]domain.Member{}
 	for _, member := range team.members {
-		membersByRole[member.Role] = append(membersByRole[member.Role], member)
+		member.Scopes = memberScopes(team, member.PublicKeySHA)
+		membersByRole[memberGroup(member)] = append(membersByRole[memberGroup(member)], member)
 	}
 	for role := range membersByRole {
 		sort.Slice(membersByRole[role], func(i, j int) bool {
@@ -624,6 +633,7 @@ func (s *MemoryStore) TeamStatus(_ context.Context, teamID string, actor domain.
 	var neverPulled []domain.Member
 	for _, member := range team.members {
 		if !pulled[member.PublicKeySHA] {
+			member.Scopes = memberScopes(team, member.PublicKeySHA)
 			neverPulled = append(neverPulled, member)
 		}
 	}
@@ -670,14 +680,14 @@ func (s *MemoryStore) scopeForActor(teamID string, scopeName string, actor domai
 }
 
 func effectivePermission(scope *memoryScope, actor domain.Member) string {
+	if permission := scope.memberAccess[actor.PublicKeySHA]; permission != "" {
+		return permission
+	}
 	if actor.Role == "admins" {
 		if permission := scope.roleAccess["admins"]; permission != "" {
 			return permission
 		}
 		return "admin"
-	}
-	if permission := scope.memberAccess[actor.PublicKeySHA]; permission != "" {
-		return permission
 	}
 	return scope.roleAccess[actor.Role]
 }
@@ -688,11 +698,13 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 			Name string `json:"name"`
 		} `json:"team"`
 		Members []struct {
-			Handle              string `json:"handle"`
-			PublicKeySHA        string `json:"public_key_sha"`
-			SigningPublicKey    string `json:"signing_public_key"`
-			EncryptionPublicKey string `json:"encryption_public_key"`
-			Role                string `json:"role"`
+			Handle              string            `json:"handle"`
+			PublicKeySHA        string            `json:"public_key_sha"`
+			SigningPublicKey    string            `json:"signing_public_key"`
+			EncryptionPublicKey string            `json:"encryption_public_key"`
+			Role                string            `json:"role"`
+			Management          bool              `json:"management"`
+			Scopes              map[string]string `json:"scopes"`
 		} `json:"members"`
 		Scopes map[string]struct {
 			EnvFiles          []string          `json:"env_files"`
@@ -713,6 +725,7 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 		if role == "" {
 			role = "developers"
 		}
+		management := member.Management || role == "admins"
 		team.members[member.PublicKeySHA] = domain.Member{
 			PublicIdentity: domain.PublicIdentity{
 				Handle:              member.Handle,
@@ -720,9 +733,14 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 				SigningPublicKey:    member.SigningPublicKey,
 				EncryptionPublicKey: member.EncryptionPublicKey,
 			},
-			Role:   role,
-			Status: "active",
+			Role:       role,
+			Management: management,
+			Scopes:     copyStringMap(member.Scopes),
+			Status:     "active",
 		}
+	}
+	for _, scope := range team.scopes {
+		scope.memberAccess = map[string]string{}
 	}
 	for name, scopeSnapshot := range snapshot.Scopes {
 		scope := team.scopes[name]
@@ -740,6 +758,15 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 		scope.envFiles = append([]string(nil), scopeSnapshot.EnvFiles...)
 		scope.roleAccess = copyStringMap(scopeSnapshot.DefaultRoleAccess)
 	}
+	for _, member := range team.members {
+		for scopeName, permission := range member.Scopes {
+			scope := team.scopes[scopeName]
+			if scope == nil {
+				continue
+			}
+			scope.memberAccess[member.PublicKeySHA] = permission
+		}
+	}
 }
 
 func applyApprovedAccessDecisions(team *memoryTeam, decisions []domain.ConfigDecision) {
@@ -752,6 +779,14 @@ func applyApprovedAccessDecisions(team *memoryTeam, decisions []domain.ConfigDec
 			continue
 		}
 		scope.memberAccess[decision.PublicKeySHA] = decision.Permission
+		member := team.members[decision.PublicKeySHA]
+		if member.PublicKeySHA != "" {
+			if member.Scopes == nil {
+				member.Scopes = map[string]string{}
+			}
+			member.Scopes[decision.Scope] = decision.Permission
+			team.members[decision.PublicKeySHA] = member
+		}
 	}
 }
 
@@ -784,6 +819,31 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+func setupMemberScopes(scopes []domain.SetupScope) map[string]string {
+	out := map[string]string{}
+	for _, scope := range scopes {
+		out[scope.Name] = "write"
+	}
+	return out
+}
+
+func memberScopes(team *memoryTeam, publicKeySHA string) map[string]string {
+	out := map[string]string{}
+	for name, scope := range team.scopes {
+		if permission := scope.memberAccess[publicKeySHA]; permission != "" {
+			out[name] = permission
+		}
+	}
+	return out
+}
+
+func memberGroup(member domain.Member) string {
+	if domain.MemberCanManage(member) {
+		return "management"
+	}
+	return "members"
 }
 
 func scopeNames(scopes []domain.SetupScope) []string {
@@ -820,7 +880,7 @@ func (s *MemoryStore) CreateTeamInvite(_ context.Context, teamID string, actor d
 	if err != nil {
 		return domain.CreateTeamInviteResult{}, err
 	}
-	if actor.Role != "admins" {
+	if !domain.MemberCanManage(actor) {
 		return domain.CreateTeamInviteResult{}, ErrPermissionDenied
 	}
 
@@ -841,14 +901,15 @@ func (s *MemoryStore) CreateTeamInvite(_ context.Context, teamID string, actor d
 		return domain.CreateTeamInviteResult{}, err
 	}
 	team.invites[inviteID] = &memoryInvite{
-		id:              inviteID,
-		label:           strings.TrimSpace(request.Label),
-		pinVerifier:     hash,
-		status:          "active",
-		requestedRole:   role,
-		requestedScopes: scopes,
-		createdBy:       actor.PublicKeySHA,
-		createdAt:       time.Now().UTC(),
+		id:                  inviteID,
+		label:               strings.TrimSpace(request.Label),
+		pinVerifier:         hash,
+		status:              "active",
+		requestedRole:       role,
+		requestedManagement: request.RequestedManagement || role == "admins",
+		requestedScopes:     scopes,
+		createdBy:           actor.PublicKeySHA,
+		createdAt:           time.Now().UTC(),
 	}
 	return domain.CreateTeamInviteResult{
 		InviteID: inviteID,
@@ -935,7 +996,7 @@ func (s *MemoryStore) ListAdminInvites(_ context.Context, teamID string, actor d
 	if err != nil {
 		return domain.AdminInvitesData{}, err
 	}
-	if actor.Role != "admins" {
+	if !domain.MemberCanManage(actor) {
 		return domain.AdminInvitesData{}, ErrPermissionDenied
 	}
 	var rows []domain.AdminInviteRow
@@ -967,7 +1028,7 @@ func (s *MemoryStore) RevokeTeamInvite(_ context.Context, teamID string, inviteI
 	if err != nil {
 		return err
 	}
-	if actor.Role != "admins" {
+	if !domain.MemberCanManage(actor) {
 		return ErrPermissionDenied
 	}
 	inv := team.invites[inviteID]

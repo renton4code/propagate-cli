@@ -51,6 +51,52 @@ func updateScopeDeclarationsFromLocalValues(project config.ParsedProject, scopeN
 	return project
 }
 
+func updateScopeDeclarationsFromEnvPushDiff(project config.ParsedProject, scopeName string, scopeKey []byte, scopeKeyVersion int, values map[envVarKey]string, diff envPushDiff) config.ParsedProject {
+	scopeIdx := -1
+	for idx := range project.Scopes {
+		if project.Scopes[idx].Name == scopeName {
+			scopeIdx = idx
+			break
+		}
+	}
+	if scopeIdx < 0 {
+		return project
+	}
+
+	existing := declarationMap(project.Scopes[scopeIdx].Variables)
+	upsertDeclaration := func(key envVarKey) {
+		sensitivity := existing[key].Sensitivity
+		if sensitivity == "" {
+			sensitivity = config.SensitivitySensitive
+		}
+		existing[key] = declarationForValue(project.TeamID, scopeName, scopeKey, scopeKeyVersion, key, values[key], sensitivity)
+	}
+	for _, key := range diff.Unchanged {
+		upsertDeclaration(key)
+	}
+	for _, key := range diff.Added {
+		upsertDeclaration(key)
+	}
+	for _, key := range diff.Changed {
+		upsertDeclaration(key)
+	}
+	for _, key := range diff.Removed {
+		delete(existing, key)
+	}
+
+	keys := make([]envVarKey, 0, len(existing))
+	for key := range existing {
+		keys = append(keys, key)
+	}
+	sortEnvKeys(keys)
+	next := make([]config.VariableDeclaration, 0, len(keys))
+	for _, key := range keys {
+		next = append(next, existing[key])
+	}
+	project.Scopes[scopeIdx].Variables = next
+	return project
+}
+
 func updateScopeDeclarationForValue(project config.ParsedProject, scopeName string, scopeKey []byte, scopeKeyVersion int, key envVarKey, value string) config.ParsedProject {
 	scopeIdx := -1
 	for idx := range project.Scopes {

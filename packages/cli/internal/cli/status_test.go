@@ -150,7 +150,7 @@ func TestStatusJSONCombinesSeparateStatuses(t *testing.T) {
 	if result.Config == nil || result.Config.State != "equal" {
 		t.Fatalf("config status missing or unexpected: %+v", result.Config)
 	}
-	if result.Team == nil || result.Team.CurrentRole != "admins" {
+	if result.Team == nil || result.Team.CurrentRole != "management" {
 		t.Fatalf("team status missing or unexpected: %+v", result.Team)
 	}
 	if result.Env == nil || result.Env.VariablesCount != 1 {

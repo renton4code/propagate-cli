@@ -20,7 +20,7 @@ func (s *SQLStore) CreateTeamInvite(ctx context.Context, teamID string, actor do
 	if err != nil {
 		return domain.CreateTeamInviteResult{}, err
 	}
-	if member.Role != "admins" {
+	if !domain.MemberCanManage(member) {
 		return domain.CreateTeamInviteResult{}, ErrPermissionDenied
 	}
 
@@ -68,10 +68,10 @@ func (s *SQLStore) CreateTeamInvite(ctx context.Context, teamID string, actor do
 	_, err = s.db.ExecContext(ctx, `
 		insert into team_invites (
 			id, team_id, label, pin_verifier, status, failed_pin_attempts,
-			requested_role, requested_scopes, created_by_key_sha
+			requested_role, requested_management, requested_scopes, created_by_key_sha
 		)
-		values ($1, $2, $3, $4, 'active', 0, $5, $6::jsonb, $7)
-	`, inviteID, teamID, strings.TrimSpace(request.Label), string(hash), role, scopesArg, actor.PublicKeySHA)
+		values ($1, $2, $3, $4, 'active', 0, $5, $6, $7::jsonb, $8)
+	`, inviteID, teamID, strings.TrimSpace(request.Label), string(hash), role, request.RequestedManagement || role == "admins", scopesArg, actor.PublicKeySHA)
 	if err != nil {
 		return domain.CreateTeamInviteResult{}, err
 	}
@@ -199,7 +199,7 @@ func (s *SQLStore) ListAdminInvites(ctx context.Context, teamID string, actor do
 	if err != nil {
 		return domain.AdminInvitesData{}, err
 	}
-	if member.Role != "admins" {
+	if !domain.MemberCanManage(member) {
 		return domain.AdminInvitesData{}, ErrPermissionDenied
 	}
 
@@ -240,7 +240,7 @@ func (s *SQLStore) RevokeTeamInvite(ctx context.Context, teamID string, inviteID
 	if err != nil {
 		return err
 	}
-	if member.Role != "admins" {
+	if !domain.MemberCanManage(member) {
 		return ErrPermissionDenied
 	}
 	res, err := s.db.ExecContext(ctx, `

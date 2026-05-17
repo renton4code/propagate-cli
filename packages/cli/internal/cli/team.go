@@ -20,16 +20,16 @@ import (
 
 type teamJoinOptions struct {
 	globalOptions
-	Handle            string
-	RequestedRole     string
-	RequestedScopes   scopeFlags
-	DryRun            bool
-	IncludeInit       bool
-	InitAgentGuidance bool
-	InitSkipGuidance  bool
-	JoinMode          string
-	InviteID          string
-	InvitePIN         string
+	Handle              string
+	RequestedManagement bool
+	RequestedScopes     scopeFlags
+	DryRun              bool
+	IncludeInit         bool
+	InitAgentGuidance   bool
+	InitSkipGuidance    bool
+	JoinMode            string
+	InviteID            string
+	InvitePIN           string
 }
 
 type scopeFlags []string
@@ -49,7 +49,7 @@ type TeamJoinResult struct {
 	Identity            *identity.Summary `json:"identity,omitempty"`
 	TeamID              string            `json:"team_id,omitempty"`
 	TeamName            string            `json:"team_name,omitempty"`
-	RequestedRole       string            `json:"requested_role"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
 	BackendStatus       string            `json:"backend_status"`
 	Warnings            []string          `json:"warnings,omitempty"`
@@ -80,13 +80,12 @@ func runTeamCommand(args []string, global globalOptions, streams Streams) int {
 func runTeamJoinCommand(args []string, global globalOptions, streams Streams) int {
 	opts := teamJoinOptions{
 		globalOptions: global,
-		RequestedRole: "developers",
 	}
 	fs := flag.NewFlagSet("team join", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addGlobalFlags(fs, &opts.globalOptions)
 	fs.StringVar(&opts.Handle, "handle", "", "handle to store with a new local identity")
-	fs.StringVar(&opts.RequestedRole, "role", opts.RequestedRole, "requested role: developers or admins")
+	fs.BoolVar(&opts.RequestedManagement, "management", false, "request management access for config changes")
 	fs.Var(&opts.RequestedScopes, "scope", "requested scope, optionally as scope=permission; may be repeated")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "show what would happen without writing propagate.yaml")
 	fs.BoolVar(&opts.IncludeInit, "init", false, "run existing-project init before adding the join request")
@@ -126,26 +125,18 @@ func runTeamJoinCommand(args []string, global globalOptions, streams Streams) in
 }
 
 func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) {
-	opts.RequestedRole = strings.TrimSpace(opts.RequestedRole)
-	if opts.RequestedRole == "" {
-		opts.RequestedRole = "developers"
-	}
-	if err := config.ValidateRole(opts.RequestedRole); err != nil {
-		return TeamJoinResult{}, commandError(ExitUsageError, "usage_error", "Invalid requested role", err)
-	}
-
 	reader := bufio.NewReader(streams.In)
 	result := TeamJoinResult{
-		OK:            true,
-		Command:       "team join",
-		Status:        "success",
-		DryRun:        opts.DryRun,
-		RequestedRole: opts.RequestedRole,
-		BackendStatus: "not_contacted_git_review_only",
+		OK:                  true,
+		Command:             "team join",
+		Status:              "success",
+		DryRun:              opts.DryRun,
+		RequestedManagement: opts.RequestedManagement,
+		BackendStatus:       "not_contacted_git_review_only",
 		NextSteps: []string{
 			"Commit this config change.",
 			"Open a pull request.",
-			"Ask a Propagate admin to run `propagate config push` after approval.",
+			"Ask a Propagate management member to run `propagate config push` after approval.",
 		},
 	}
 	if opts.IncludeInit {
@@ -228,7 +219,7 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 			"config_missing",
 			"propagate.yaml is required before requesting team access",
 			nil,
-			"Ask an admin to share the repository's Propagate config, or run `propagate init` if you are setting up a new team.",
+			"Ask a Propagate management member to share the repository's Propagate config, or run `propagate init` if you are setting up a new team.",
 		)
 	}
 	result.ProjectConfigPath = configPath
@@ -245,7 +236,7 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		return TeamJoinResult{}, commandError(ExitUsageError, "usage_error", "Invalid requested scope", err)
 	}
 	if len(opts.RequestedScopes) == 0 {
-		requestedScopes = project.DefaultRequestedScopes(opts.RequestedRole)
+		requestedScopes = project.DefaultRequestedAccess(opts.RequestedManagement)
 	}
 	result.RequestedScopes = requestedScopes
 
@@ -265,7 +256,7 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		PublicKeySHA:        summary.PublicKeySHA,
 		SigningPublicKey:    summary.SigningPublicKey,
 		EncryptionPublicKey: summary.EncryptionPublicKey,
-		RequestedRole:       opts.RequestedRole,
+		RequestedManagement: opts.RequestedManagement,
 		RequestedScopes:     requestedScopes,
 		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
 	}
@@ -281,7 +272,7 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		case errors.Is(err, config.ErrAlreadyMember):
 			return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "This identity is already an active team member", err, "Run `propagate team status` to inspect current membership.")
 		case errors.Is(err, config.ErrDuplicatePendingJoin):
-			return TeamJoinResult{}, commandError(ExitConflict, "duplicate_pending_join", "This identity already has a pending join request", err, "Commit the existing propagate.yaml diff or ask an admin to review it.")
+			return TeamJoinResult{}, commandError(ExitConflict, "duplicate_pending_join", "This identity already has a pending join request", err, "Commit the existing propagate.yaml diff or ask a Propagate management member to review it.")
 		default:
 			return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "Cannot add pending join request to propagate.yaml", err)
 		}
@@ -380,7 +371,11 @@ func renderTeamJoinResult(w io.Writer, jsonOutput bool, noColor bool, result Tea
 		}
 		fmt.Fprintln(w)
 	}
-	fmt.Fprintf(w, "Requested role: %s\n", result.RequestedRole)
+	if result.RequestedManagement {
+		fmt.Fprintln(w, "Requested management: true")
+	} else {
+		fmt.Fprintln(w, "Requested management: false")
+	}
 	if len(result.RequestedScopes) == 0 {
 		fmt.Fprintln(w, "Requested scopes: none specified")
 	} else {
@@ -429,7 +424,7 @@ func printTeamHelp(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  join      add a Git-reviewed pending join request to propagate.yaml")
-	fmt.Fprintln(w, "  invite    create, list, or revoke PIN invites (admin)")
+	fmt.Fprintln(w, "  invite    create, list, or revoke PIN invites (management)")
 	fmt.Fprintln(w, "  status    show local membership and cloud team activity")
 }
 
@@ -439,7 +434,7 @@ func printTeamJoinHelp(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  --handle VALUE           handle for a new local identity")
-	fmt.Fprintln(w, "  --role VALUE             requested role: developers or admins")
+	fmt.Fprintln(w, "  --management             request config-management access")
 	fmt.Fprintln(w, "  --scope VALUE            requested scope, optionally scope=permission; may be repeated")
 	fmt.Fprintln(w, "  --dry-run                show what would happen without writing propagate.yaml")
 	fmt.Fprintln(w, "  --init                   run existing-project init before adding the join request")

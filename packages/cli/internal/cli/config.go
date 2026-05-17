@@ -66,6 +66,7 @@ type JoinDecision struct {
 	Handle       string            `json:"handle"`
 	PublicKeySHA string            `json:"public_key_sha"`
 	Role         string            `json:"role"`
+	Management   bool              `json:"management,omitempty"`
 	Scopes       map[string]string `json:"scopes,omitempty"`
 	Decision     string            `json:"decision"`
 }
@@ -168,8 +169,8 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 	}
 
 	actor := findMember(project.Members, summary.PublicKeySHA)
-	if actor == nil || actor.Role != "admins" {
-		return ConfigPushResult{}, commandError(ExitPermissionDenied, "permission_denied", "Only admins can push Propagate config changes", nil, "Ask a Propagate admin to review the config diff and run `propagate config push`.")
+	if actor == nil || !config.MemberCanManage(*actor) {
+		return ConfigPushResult{}, commandError(ExitPermissionDenied, "permission_denied", "Only members with management access can push Propagate config changes", nil, "Ask a Propagate manager to review the config diff and run `propagate config push`.")
 	}
 
 	localHash, err := config.ConfigHash(project)
@@ -220,7 +221,7 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 	if len(project.PendingJoins) > 0 && len(approved)+len(declined) == 0 {
 		result.Status = "no_change"
 		result.BackendStatus = "skipped"
-		result.NextSteps = []string{"Skipped joins remain pending in propagate.yaml. Re-run config push when an admin is ready to approve or decline them."}
+		result.NextSteps = []string{"Skipped joins remain pending in propagate.yaml. Re-run config push when a management member is ready to approve or decline them."}
 		return result, nil
 	}
 	var targetEnvelopes []apiclient.ScopeKeyEnvelope
@@ -454,10 +455,7 @@ func safeSummaryInt(summary map[string]any, key string) (int, bool) {
 }
 
 func scopeMemberCanRead(scope config.ScopeSummary, member config.Member) bool {
-	permission := scope.DefaultRoleAccess[member.Role]
-	if permission == "" && member.Role == "admins" {
-		permission = "admin"
-	}
+	permission := config.MemberScopePermission(member, scope)
 	return permissionRank(permission) >= permissionRank("read")
 }
 
@@ -597,6 +595,8 @@ func applyJoinDecisions(project config.ParsedProject, decisions map[string]strin
 				SigningPublicKey:    join.SigningPublicKey,
 				EncryptionPublicKey: join.EncryptionPublicKey,
 				Role:                join.RequestedRole,
+				Management:          join.RequestedManagement,
+				Scopes:              copyStringMap(join.RequestedScopes),
 			})
 			approved = append(approved, summary)
 		case "decline":
@@ -618,6 +618,7 @@ func joinDecisionSummary(join config.JoinRequest, decision string) JoinDecision 
 		Handle:       join.Handle,
 		PublicKeySHA: join.PublicKeySHA,
 		Role:         join.RequestedRole,
+		Management:   join.RequestedManagement,
 		Scopes:       join.RequestedScopes,
 		Decision:     decision,
 	}
@@ -639,6 +640,7 @@ func apiDecisionList(items []JoinDecision, includeScopeAccess bool) []apiclient.
 			Handle:       item.Handle,
 			PublicKeySHA: item.PublicKeySHA,
 			Role:         item.Role,
+			Management:   item.Management,
 		})
 		if !includeScopeAccess {
 			continue
@@ -841,6 +843,14 @@ func sortedJoinScopes(scopes map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func valueOrDash(value string) string {

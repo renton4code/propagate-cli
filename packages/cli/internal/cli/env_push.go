@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"propagate/cli/internal/apiclient"
@@ -47,12 +48,14 @@ type EnvPushResult struct {
 	VariablesChangedCount   int               `json:"variables_changed_count"`
 	VariablesRemovedCount   int               `json:"variables_removed_count"`
 	VariablesUnchangedCount int               `json:"variables_unchanged_count"`
+	VariablesSkippedCount   int               `json:"variables_skipped_count,omitempty"`
 	CreatedVersionsCount    int               `json:"created_versions_count"`
 	RemovedVariablesCount   int               `json:"removed_variables_count"`
 	AuditEventsCount        int               `json:"audit_events_count"`
 	BackendStatus           string            `json:"backend_status"`
 	Warnings                []string          `json:"warnings,omitempty"`
 	NextSteps               []string          `json:"next_steps,omitempty"`
+	SkippedChanges          []EnvPushChange   `json:"skipped_changes,omitempty"`
 }
 
 type EnvPushFile struct {
@@ -61,6 +64,7 @@ type EnvPushFile struct {
 	VariablesChanged   int    `json:"variables_changed"`
 	VariablesRemoved   int    `json:"variables_removed"`
 	VariablesUnchanged int    `json:"variables_unchanged"`
+	VariablesSkipped   int    `json:"variables_skipped,omitempty"`
 	UnknownLineCount   int    `json:"unknown_line_count,omitempty"`
 }
 
@@ -202,7 +206,7 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 		return EnvPushResult{}, commandError(ExitValidationError, "validation_failed", "Cloud returned a pull bundle for a different scope", fmt.Errorf("requested %s, received %s", scopeName, bundle.Scope.Name))
 	}
 	if bundle.ScopeKeyEnvelope.RecipientKeySHA != "" && bundle.ScopeKeyEnvelope.RecipientKeySHA != ident.PublicKeySHA {
-		return EnvPushResult{}, commandError(ExitPermissionDenied, "permission_denied", fmt.Sprintf("No writable scope key envelope was returned for scope %q", scopeName), nil, "Ask a Propagate admin to approve access and run `propagate config push`.")
+		return EnvPushResult{}, commandError(ExitPermissionDenied, "permission_denied", fmt.Sprintf("No writable scope key envelope was returned for scope %q", scopeName), nil, "Ask a Propagate management member to approve access and run `propagate config push`.")
 	}
 
 	scopeKey, err := secretcrypto.DecryptScopeKey(
@@ -214,14 +218,19 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 		bundle.ScopeKeyEnvelope.ScopeKeyVersion,
 	)
 	if err != nil {
-		return EnvPushResult{}, commandError(ExitPermissionDenied, "scope_key_decrypt_failed", fmt.Sprintf("Cannot decrypt the scope key envelope for scope %q", scopeName), err, "No values were uploaded.", "Ask a Propagate admin to refresh your access envelope.")
+		return EnvPushResult{}, commandError(ExitPermissionDenied, "scope_key_decrypt_failed", fmt.Sprintf("Cannot decrypt the scope key envelope for scope %q", scopeName), err, "No values were uploaded.", "Ask a Propagate management member to refresh your access envelope.")
 	}
 
 	cloudValues, err := decryptCloudEnvState(project.TeamID, scopeName, scopeKey, bundle.SecretVersions)
 	if err != nil {
 		return EnvPushResult{}, commandError(ExitValidationError, "decrypt_failed", "Cannot decrypt current cloud env values for diffing", err, "No values were uploaded.")
 	}
-	targetProject := updateScopeDeclarationsFromLocalValues(project, scopeName, scopeKey, bundle.ScopeKeyEnvelope.ScopeKeyVersion, localValues)
+	diff := diffEnvValues(localValues, cloudValues, localScope.EnvFiles)
+	applyEnvPushSummaryToResult(&result, diff, envPushDiff{})
+	result.Changes = pushChanges(diff)
+	result.Files = applyEnvPushDiffToFiles(result.Files, diff)
+
+	targetProject := updateScopeDeclarationsFromEnvPushDiff(project, scopeName, scopeKey, bundle.ScopeKeyEnvelope.ScopeKeyVersion, localValues, diff)
 	targetSnapshot, err := config.SnapshotJSON(targetProject)
 	if err != nil {
 		return EnvPushResult{}, commandError(ExitValidationError, "config_invalid", "Cannot build variable declarations for env push", err)
@@ -232,12 +241,7 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 	}
 	configMetadataChanged := targetRendered != project.Raw
 
-	diff := diffEnvValues(localValues, cloudValues, localScope.EnvFiles)
-	applyEnvPushDiffToResult(&result, diff)
-	result.Changes = pushChanges(diff)
-	result.Files = applyEnvPushDiffToFiles(result.Files, diff)
-
-	if result.VariablesAddedCount+result.VariablesChangedCount+result.VariablesRemovedCount == 0 && !configMetadataChanged {
+	if envPushDiffChangeCount(diff) == 0 && !configMetadataChanged {
 		result.Status = "no_change"
 		result.BackendStatus = "up_to_date"
 		result.NextSteps = []string{"No env push is needed."}
@@ -249,11 +253,35 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 		result.NextSteps = []string{"Re-run without `--dry-run` and with `--yes` after reviewing the change summary."}
 		return result, nil
 	}
-	if err := confirmEnvPush(opts, reader, streams.In, streams.Out, result); err != nil {
+	approvedDiff, skippedDiff, err := confirmEnvPush(opts, reader, streams.In, streams.Out, result, diff)
+	if err != nil {
 		return EnvPushResult{}, err
 	}
+	if envPushDiffChangeCount(skippedDiff) > 0 {
+		applyEnvPushSummaryToResult(&result, approvedDiff, skippedDiff)
+		result.Changes = pushChanges(approvedDiff)
+		result.SkippedChanges = pushChanges(skippedDiff)
+		result.Files = applyEnvPushDiffsToFiles(files, approvedDiff, skippedDiff)
 
-	upserts, removals, err := buildEnvPushPayload(project.TeamID, scopeName, scopeKey, bundle.ScopeKeyEnvelope.ScopeKeyVersion, localValues, cloudValues, diff)
+		targetProject = updateScopeDeclarationsFromEnvPushDiff(project, scopeName, scopeKey, bundle.ScopeKeyEnvelope.ScopeKeyVersion, localValues, approvedDiff)
+		targetSnapshot, err = config.SnapshotJSON(targetProject)
+		if err != nil {
+			return EnvPushResult{}, commandError(ExitValidationError, "config_invalid", "Cannot build variable declarations for env push", err)
+		}
+		targetRendered, err = config.RenderParsed(targetProject)
+		if err != nil {
+			return EnvPushResult{}, commandError(ExitValidationError, "config_invalid", "Cannot render variable declarations for env push", err)
+		}
+		configMetadataChanged = targetRendered != project.Raw
+	}
+	if envPushDiffChangeCount(approvedDiff) == 0 && !configMetadataChanged {
+		result.Status = "no_change"
+		result.BackendStatus = "validated"
+		result.NextSteps = []string{"No selected env changes need to be pushed."}
+		return result, nil
+	}
+
+	upserts, removals, err := buildEnvPushPayload(project.TeamID, scopeName, scopeKey, bundle.ScopeKeyEnvelope.ScopeKeyVersion, localValues, cloudValues, approvedDiff)
 	if err != nil {
 		return EnvPushResult{}, commandError(ExitInternalError, "internal_error", "Cannot encrypt env push payload", err)
 	}
@@ -296,6 +324,9 @@ func runEnvPush(opts envPushOptions, streams Streams) (EnvPushResult, error) {
 	}
 	result.BackendStatus = "pushed"
 	result.NextSteps = []string{"Ask teammates to run `propagate env pull` when they need the updated values."}
+	if result.VariablesSkippedCount > 0 {
+		result.NextSteps = append(result.NextSteps, "Skipped changes remain local; re-run `propagate env push` when they are ready.")
+	}
 	return result, nil
 }
 
@@ -391,16 +422,27 @@ func diffEnvValues(local map[envVarKey]string, cloud map[envVarKey]cloudEnvValue
 }
 
 func applyEnvPushDiffToResult(result *EnvPushResult, diff envPushDiff) {
+	applyEnvPushSummaryToResult(result, diff, envPushDiff{})
+}
+
+func applyEnvPushSummaryToResult(result *EnvPushResult, diff envPushDiff, skipped envPushDiff) {
 	result.VariablesAddedCount = len(diff.Added)
 	result.VariablesChangedCount = len(diff.Changed)
 	result.VariablesRemovedCount = len(diff.Removed)
 	result.VariablesUnchangedCount = len(diff.Unchanged)
+	result.VariablesSkippedCount = envPushDiffChangeCount(skipped)
 }
 
 func applyEnvPushDiffToFiles(files []EnvPushFile, diff envPushDiff) []EnvPushFile {
+	return applyEnvPushDiffsToFiles(files, diff, envPushDiff{})
+}
+
+func applyEnvPushDiffsToFiles(files []EnvPushFile, diff envPushDiff, skipped envPushDiff) []EnvPushFile {
+	out := make([]EnvPushFile, len(files))
 	byPath := map[string]*EnvPushFile{}
 	for idx := range files {
-		byPath[files[idx].Path] = &files[idx]
+		out[idx] = EnvPushFile{Path: files[idx].Path, UnknownLineCount: files[idx].UnknownLineCount}
+		byPath[out[idx].Path] = &out[idx]
 	}
 	for _, key := range diff.Added {
 		if file := byPath[key.Path]; file != nil {
@@ -422,7 +464,12 @@ func applyEnvPushDiffToFiles(files []EnvPushFile, diff envPushDiff) []EnvPushFil
 			file.VariablesUnchanged++
 		}
 	}
-	return files
+	for _, key := range envPushChangedKeys(skipped) {
+		if file := byPath[key.Path]; file != nil {
+			file.VariablesSkipped++
+		}
+	}
+	return out
 }
 
 func pushChanges(diff envPushDiff) []EnvPushChange {
@@ -436,6 +483,59 @@ func pushChanges(diff envPushDiff) []EnvPushChange {
 	appendChanges(diff.Changed, "changed")
 	appendChanges(diff.Removed, "removed")
 	return changes
+}
+
+func envPushDiffChangeCount(diff envPushDiff) int {
+	return len(diff.Added) + len(diff.Changed) + len(diff.Removed)
+}
+
+func envPushChangedKeys(diff envPushDiff) []envVarKey {
+	keys := make([]envVarKey, 0, envPushDiffChangeCount(diff))
+	keys = append(keys, diff.Added...)
+	keys = append(keys, diff.Changed...)
+	keys = append(keys, diff.Removed...)
+	return keys
+}
+
+func selectEnvPushDiff(diff envPushDiff, selected map[envVarKey]bool) envPushDiff {
+	return envPushDiff{
+		Added:     filterEnvPushKeys(diff.Added, selected),
+		Changed:   filterEnvPushKeys(diff.Changed, selected),
+		Removed:   filterEnvPushKeys(diff.Removed, selected),
+		Unchanged: append([]envVarKey(nil), diff.Unchanged...),
+	}
+}
+
+func skippedEnvPushDiff(full envPushDiff, approved envPushDiff) envPushDiff {
+	approvedKeys := map[envVarKey]bool{}
+	for _, key := range envPushChangedKeys(approved) {
+		approvedKeys[key] = true
+	}
+	return envPushDiff{
+		Added:   filterEnvPushKeysInverse(full.Added, approvedKeys),
+		Changed: filterEnvPushKeysInverse(full.Changed, approvedKeys),
+		Removed: filterEnvPushKeysInverse(full.Removed, approvedKeys),
+	}
+}
+
+func filterEnvPushKeys(keys []envVarKey, selected map[envVarKey]bool) []envVarKey {
+	out := make([]envVarKey, 0, len(keys))
+	for _, key := range keys {
+		if selected[key] {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func filterEnvPushKeysInverse(keys []envVarKey, selected map[envVarKey]bool) []envVarKey {
+	out := make([]envVarKey, 0, len(keys))
+	for _, key := range keys {
+		if !selected[key] {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 func buildEnvPushPayload(teamID string, scopeName string, scopeKey []byte, scopeKeyVersion int, local map[envVarKey]string, cloud map[envVarKey]cloudEnvValue, diff envPushDiff) ([]apiclient.EnvPushUpsert, []apiclient.EnvPushRemoval, error) {
@@ -469,12 +569,19 @@ func buildEnvPushPayload(teamID string, scopeName string, scopeKey []byte, scope
 	return upserts, removals, nil
 }
 
-func confirmEnvPush(opts envPushOptions, reader *bufio.Reader, in io.Reader, out io.Writer, result EnvPushResult) error {
+func confirmEnvPush(opts envPushOptions, reader *bufio.Reader, in io.Reader, out io.Writer, result EnvPushResult, diff envPushDiff) (envPushDiff, envPushDiff, error) {
 	if opts.Yes {
-		return nil
+		return diff, envPushDiff{}, nil
 	}
 	if opts.NonInteractive {
-		return commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive env push requires --yes before uploading encrypted changes", nil, "Re-run with `--yes` after reviewing `propagate env push --dry-run`.")
+		return envPushDiff{}, envPushDiff{}, commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive env push requires --yes before uploading encrypted changes", nil, "Re-run with `--yes` after reviewing `propagate env push --dry-run`.")
+	}
+	if promptCanUseTUI(in, out) && envPushDiffChangeCount(diff) > 0 {
+		approved, err := promptEnvPushSelectionTUI(in, out, result, diff)
+		if err != nil {
+			return envPushDiff{}, envPushDiff{}, err
+		}
+		return approved, skippedEnvPushDiff(diff, approved), nil
 	}
 	label := fmt.Sprintf(
 		"Push env changes to %s (%d added, %d changed, %d removed)?",
@@ -483,14 +590,68 @@ func confirmEnvPush(opts envPushOptions, reader *bufio.Reader, in io.Reader, out
 		result.VariablesChangedCount,
 		result.VariablesRemovedCount,
 	)
+	if envPushDiffChangeCount(diff) == 0 {
+		label = fmt.Sprintf("Push env metadata updates to %s?", result.Scope)
+	}
 	ok, err := promptConfirm(reader, in, out, label, false)
 	if err != nil {
-		return err
+		return envPushDiff{}, envPushDiff{}, err
 	}
 	if !ok {
-		return commandError(ExitUserCanceled, "user_canceled", "Env push was canceled before upload", nil)
+		return envPushDiff{}, envPushDiff{}, commandError(ExitUserCanceled, "user_canceled", "Env push was canceled before upload", nil)
 	}
-	return nil
+	return diff, envPushDiff{}, nil
+}
+
+type envPushSelectableChange struct {
+	Key    envVarKey
+	Change string
+}
+
+func promptEnvPushSelectionTUI(in io.Reader, out io.Writer, result EnvPushResult, diff envPushDiff) (envPushDiff, error) {
+	items := envPushSelectableChanges(diff)
+	choices := make([]tuiMultiChoice, 0, len(items))
+	for idx, item := range items {
+		choices = append(choices, tuiMultiChoice{
+			Label:       fmt.Sprintf("%s %s", item.Change, item.Key.Name),
+			Description: item.Key.Path,
+			Value:       fmt.Sprintf("%d", idx),
+			Selected:    true,
+		})
+	}
+	selectedValues, err := promptMultiChoiceTUI(
+		in,
+		out,
+		fmt.Sprintf("Select env changes to push to %s", result.Scope),
+		[]string{fmt.Sprintf("%d added, %d changed, %d removed. Values are never shown here.", result.VariablesAddedCount, result.VariablesChangedCount, result.VariablesRemovedCount)},
+		choices,
+		true,
+	)
+	if err != nil {
+		return envPushDiff{}, err
+	}
+	selected := map[envVarKey]bool{}
+	for _, value := range selectedValues {
+		idx, err := strconv.Atoi(value)
+		if err != nil || idx < 0 || idx >= len(items) {
+			return envPushDiff{}, commandError(ExitValidationError, "validation_failed", "Prompt returned an invalid env change selection", err)
+		}
+		selected[items[idx].Key] = true
+	}
+	return selectEnvPushDiff(diff, selected), nil
+}
+
+func envPushSelectableChanges(diff envPushDiff) []envPushSelectableChange {
+	var items []envPushSelectableChange
+	appendItems := func(keys []envVarKey, kind string) {
+		for _, key := range keys {
+			items = append(items, envPushSelectableChange{Key: key, Change: kind})
+		}
+	}
+	appendItems(diff.Added, "add")
+	appendItems(diff.Changed, "change")
+	appendItems(diff.Removed, "remove")
+	return items
 }
 
 func mapEnvPushAPIError(err error, scope string, ident identity.Summary) error {
@@ -506,7 +667,7 @@ func mapEnvPushAPIError(err error, scope string, ident identity.Summary) error {
 			fmt.Sprintf("Cannot push env values for scope %q with identity %s", scope, ident.PublicKeySHA),
 			apiErr,
 			"No values were uploaded.",
-			"Ask a Propagate admin to grant write access for this scope.",
+			"Ask a Propagate management member to grant write access for this scope.",
 		)
 	case "revision_conflict":
 		return commandError(ExitConflict, apiErr.Code, "Cloud config revision changed before env push", apiErr, "Run `propagate config pull`, review the env file mappings, and retry env push.")
@@ -586,19 +747,32 @@ func renderEnvPushResult(w io.Writer, jsonOutput bool, noColor bool, result EnvP
 	if len(result.Files) > 0 {
 		fmt.Fprintln(w, style.bold("Files:"))
 		for _, file := range result.Files {
-			fmt.Fprintf(w, "  - %s: %d added, %d changed, %d removed, %d unchanged\n", file.Path, file.VariablesAdded, file.VariablesChanged, file.VariablesRemoved, file.VariablesUnchanged)
+			fmt.Fprintf(w, "  - %s: %d added, %d changed, %d removed, %d unchanged", file.Path, file.VariablesAdded, file.VariablesChanged, file.VariablesRemoved, file.VariablesUnchanged)
+			if file.VariablesSkipped > 0 {
+				fmt.Fprintf(w, ", %d skipped", file.VariablesSkipped)
+			}
+			fmt.Fprintln(w)
 		}
 	}
 	fmt.Fprintf(w, "Variables added: %d\n", result.VariablesAddedCount)
 	fmt.Fprintf(w, "Variables changed: %d\n", result.VariablesChangedCount)
 	fmt.Fprintf(w, "Variables removed: %d\n", result.VariablesRemovedCount)
 	fmt.Fprintf(w, "Variables unchanged: %d\n", result.VariablesUnchangedCount)
+	if result.VariablesSkippedCount > 0 {
+		fmt.Fprintf(w, "Variables skipped: %d\n", result.VariablesSkippedCount)
+	}
 	fmt.Fprintf(w, "Encrypted versions uploaded: %d\n", result.CreatedVersionsCount)
 	fmt.Fprintf(w, "Removed variables uploaded: %d\n", result.RemovedVariablesCount)
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 	if len(result.Changes) > 0 {
 		fmt.Fprintln(w, style.bold("Changes:"))
 		for _, change := range result.Changes {
+			fmt.Fprintf(w, "  - %s %s in %s\n", change.Change, change.Name, change.Path)
+		}
+	}
+	if len(result.SkippedChanges) > 0 {
+		fmt.Fprintln(w, style.bold("Skipped:"))
+		for _, change := range result.SkippedChanges {
 			fmt.Fprintf(w, "  - %s %s in %s\n", change.Change, change.Name, change.Path)
 		}
 	}

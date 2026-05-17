@@ -30,6 +30,8 @@ type TeamStatusResult struct {
 	TeamName                  string                  `json:"team_name"`
 	Identity                  *TeamStatusIdentity     `json:"identity,omitempty"`
 	CurrentRole               string                  `json:"current_role,omitempty"`
+	CurrentManagement         bool                    `json:"current_management,omitempty"`
+	CurrentScopes             map[string]string       `json:"current_scopes,omitempty"`
 	LocalRevision             string                  `json:"local_revision,omitempty"`
 	CloudRevision             string                  `json:"cloud_revision,omitempty"`
 	LocalConfigHash           string                  `json:"local_config_hash,omitempty"`
@@ -55,18 +57,21 @@ type TeamStatusIdentity struct {
 }
 
 type TeamMember struct {
-	Handle       string `json:"handle,omitempty"`
-	PublicKeySHA string `json:"public_key_sha"`
-	Role         string `json:"role"`
-	Status       string `json:"status,omitempty"`
+	Handle       string            `json:"handle,omitempty"`
+	PublicKeySHA string            `json:"public_key_sha"`
+	Role         string            `json:"role,omitempty"`
+	Management   bool              `json:"management,omitempty"`
+	Scopes       map[string]string `json:"scopes,omitempty"`
+	Status       string            `json:"status,omitempty"`
 }
 
 type TeamPendingJoin struct {
-	Handle          string            `json:"handle,omitempty"`
-	PublicKeySHA    string            `json:"public_key_sha"`
-	RequestedRole   string            `json:"requested_role,omitempty"`
-	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
-	CreatedAt       string            `json:"created_at,omitempty"`
+	Handle              string            `json:"handle,omitempty"`
+	PublicKeySHA        string            `json:"public_key_sha"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	CreatedAt           string            `json:"created_at,omitempty"`
 }
 
 type TeamPullActivity struct {
@@ -164,7 +169,12 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	summary := ident.Summary()
 	statusIdentity := teamStatusIdentity(summary)
 	result.Identity = &statusIdentity
-	result.CurrentRole = localMemberRole(project, summary.PublicKeySHA)
+	if member := localMember(project, summary.PublicKeySHA); member != nil {
+		normalized := config.NormalizeMemberAccess(*member, project.Scopes)
+		result.CurrentRole = teamAccessGroup(normalized.Role, normalized.Management)
+		result.CurrentManagement = normalized.Management
+		result.CurrentScopes = copyStringMap(normalized.Scopes)
+	}
 
 	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
@@ -205,7 +215,9 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	result.CloudRevision = status.Team.ConfigRevision
 	result.CloudConfigHash = status.Team.ConfigHash
 	if status.Actor.PublicKeySHA != "" {
-		result.CurrentRole = status.Actor.Role
+		result.CurrentRole = teamAccessGroup(status.Actor.Role, status.Actor.Management)
+		result.CurrentManagement = status.Actor.Management || status.Actor.Role == "admins"
+		result.CurrentScopes = copyStringMap(status.Actor.Scopes)
 	}
 	if len(status.Members) > 0 {
 		result.Members = teamMembersFromCloud(status.Members)
@@ -232,14 +244,14 @@ func teamStatusIdentity(summary identity.Summary) TeamStatusIdentity {
 func teamMembersFromLocal(members []config.Member) map[string][]TeamMember {
 	out := map[string][]TeamMember{}
 	for _, member := range members {
-		role := strings.TrimSpace(member.Role)
-		if role == "" {
-			role = "members"
-		}
+		member = config.NormalizeMemberAccess(member, nil)
+		role := teamAccessGroup(member.Role, member.Management)
 		out[role] = append(out[role], TeamMember{
 			Handle:       member.Handle,
 			PublicKeySHA: member.PublicKeySHA,
 			Role:         role,
+			Management:   member.Management,
+			Scopes:       copyStringMap(member.Scopes),
 			Status:       "active",
 		})
 	}
@@ -255,9 +267,7 @@ func teamMembersFromCloud(members map[string][]apiclient.Member) map[string][]Te
 			if memberRole == "" {
 				memberRole = role
 			}
-			if memberRole == "" {
-				memberRole = "members"
-			}
+			memberRole = teamAccessGroup(memberRole, item.Management)
 			status := strings.TrimSpace(item.Status)
 			if status == "" {
 				status = "active"
@@ -266,6 +276,8 @@ func teamMembersFromCloud(members map[string][]apiclient.Member) map[string][]Te
 				Handle:       item.Handle,
 				PublicKeySHA: item.PublicKeySHA,
 				Role:         memberRole,
+				Management:   item.Management || item.Role == "admins",
+				Scopes:       copyStringMap(item.Scopes),
 				Status:       status,
 			})
 		}
@@ -284,7 +296,9 @@ func teamMemberListFromCloud(members []apiclient.Member) []TeamMember {
 		out = append(out, TeamMember{
 			Handle:       item.Handle,
 			PublicKeySHA: item.PublicKeySHA,
-			Role:         item.Role,
+			Role:         teamAccessGroup(item.Role, item.Management),
+			Management:   item.Management || item.Role == "admins",
+			Scopes:       copyStringMap(item.Scopes),
 			Status:       status,
 		})
 	}
@@ -302,11 +316,12 @@ func pendingJoinsFromLocal(joins []config.JoinRequest) []TeamPendingJoin {
 			scopes[scope] = permission
 		}
 		out = append(out, TeamPendingJoin{
-			Handle:          join.Handle,
-			PublicKeySHA:    join.PublicKeySHA,
-			RequestedRole:   join.RequestedRole,
-			RequestedScopes: scopes,
-			CreatedAt:       join.CreatedAt,
+			Handle:              join.Handle,
+			PublicKeySHA:        join.PublicKeySHA,
+			RequestedRole:       join.RequestedRole,
+			RequestedManagement: join.RequestedManagement,
+			RequestedScopes:     scopes,
+			CreatedAt:           join.CreatedAt,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -358,11 +373,24 @@ func countTeamMembers(members map[string][]TeamMember) int {
 	return count
 }
 
-func localMemberRole(project config.ParsedProject, publicKeySHA string) string {
+func localMember(project config.ParsedProject, publicKeySHA string) *config.Member {
 	if member := findMember(project.Members, publicKeySHA); member != nil {
-		return member.Role
+		return member
 	}
-	return ""
+	return nil
+}
+
+func teamAccessGroup(role string, management bool) string {
+	if management || role == "admins" {
+		return "management"
+	}
+	if strings.TrimSpace(role) == "developers" {
+		return "members"
+	}
+	if strings.TrimSpace(role) != "" {
+		return strings.TrimSpace(role)
+	}
+	return "members"
 }
 
 func normalizeRawJSON(raw json.RawMessage) json.RawMessage {
@@ -385,7 +413,7 @@ func teamStatusLocalNextSteps(project config.ParsedProject, summary identity.Sum
 			steps = append(steps, cloudStep)
 		}
 	case project.PendingJoinSHAs[summary.PublicKeySHA]:
-		steps = append(steps, "Commit the pending join request and ask a Propagate admin to run `propagate config push` after review.")
+		steps = append(steps, "Commit the pending join request and ask a Propagate management member to run `propagate config push` after review.")
 		if cloudStep != "" {
 			steps = append(steps, cloudStep)
 		}
@@ -414,7 +442,7 @@ func mapTeamStatusAPIError(err error, project config.ParsedProject, summary iden
 	case "permission_denied":
 		nextSteps := teamStatusLocalNextSteps(project, summary, "")
 		if len(nextSteps) == 0 {
-			nextSteps = []string{"Ask a Propagate admin to confirm this identity has active team access in the cloud."}
+			nextSteps = []string{"Ask a Propagate management member to confirm this identity has active team access in the cloud."}
 		}
 		return commandError(
 			ExitPermissionDenied,
@@ -464,7 +492,7 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, noColor bool, result T
 		fmt.Fprintf(w, "Checked by: %s (%s)\n", result.Identity.Handle, result.Identity.PublicKeySHA)
 	}
 	if result.CurrentRole != "" {
-		fmt.Fprintf(w, "Current role: %s\n", result.CurrentRole)
+		fmt.Fprintf(w, "Current access: %s\n", result.CurrentRole)
 	}
 	fmt.Fprintf(w, "Local revision: %s\n", valueOrDash(result.LocalRevision))
 	fmt.Fprintf(w, "Cloud revision: %s\n", valueOrDash(result.CloudRevision))
@@ -511,8 +539,10 @@ func renderPendingJoins(w io.Writer, style outputStyle, joins []TeamPendingJoin)
 	fmt.Fprintf(w, "\n%s\n", style.bold("Pending join requests:"))
 	for _, join := range joins {
 		line := memberLabel(join.Handle, join.PublicKeySHA)
-		if join.RequestedRole != "" {
-			line += " -> " + join.RequestedRole
+		if join.RequestedManagement {
+			line += " -> management"
+		} else if join.RequestedRole != "" {
+			line += " -> " + teamAccessGroup(join.RequestedRole, false)
 		}
 		if len(join.RequestedScopes) > 0 {
 			line += " scopes " + strings.Join(formatScopePermissions(join.RequestedScopes), ", ")
@@ -564,7 +594,7 @@ func orderedTeamRoles(members map[string][]TeamMember) []string {
 		}
 		seen[role] = true
 	}
-	for _, role := range []string{"admins", "developers"} {
+	for _, role := range []string{"management", "members", "admins", "developers"} {
 		if seen[role] {
 			roles = append(roles, role)
 			delete(seen, role)

@@ -28,6 +28,25 @@ type choicePromptModel struct {
 	canceled    bool
 }
 
+type tuiMultiChoice struct {
+	Label       string
+	Description string
+	Value       string
+	Selected    bool
+}
+
+type multiChoicePromptModel struct {
+	title            string
+	description      []string
+	choices          []tuiMultiChoice
+	cursor           int
+	requireSelection bool
+	errText          string
+	selected         []string
+	submitted        bool
+	canceled         bool
+}
+
 func newChoicePromptModel(title string, description []string, choices []tuiChoice, defaultIndex int) choicePromptModel {
 	if defaultIndex < 0 || defaultIndex >= len(choices) {
 		defaultIndex = 0
@@ -40,7 +59,20 @@ func newChoicePromptModel(title string, description []string, choices []tuiChoic
 	}
 }
 
+func newMultiChoicePromptModel(title string, description []string, choices []tuiMultiChoice, requireSelection bool) multiChoicePromptModel {
+	return multiChoicePromptModel{
+		title:            title,
+		description:      description,
+		choices:          append([]tuiMultiChoice(nil), choices...),
+		requireSelection: requireSelection,
+	}
+}
+
 func (m choicePromptModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m multiChoicePromptModel) Init() tea.Cmd {
 	return nil
 }
 
@@ -80,6 +112,41 @@ func (m choicePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m multiChoicePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	switch key.String() {
+	case "ctrl+c", "esc":
+		m.canceled = true
+		return m, tea.Quit
+	case "up", "k", "shift+tab":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j", "tab":
+		if m.cursor < len(m.choices)-1 {
+			m.cursor++
+		}
+	case "home":
+		m.cursor = 0
+	case "end":
+		m.cursor = len(m.choices) - 1
+	case " ":
+		if len(m.choices) > 0 {
+			m.choices[m.cursor].Selected = !m.choices[m.cursor].Selected
+			m.errText = ""
+		}
+	case "a", "A":
+		m.toggleAll()
+	case "enter":
+		return m.submit()
+	}
+	return m, nil
+}
+
 func (m choicePromptModel) submit() (tea.Model, tea.Cmd) {
 	if len(m.choices) == 0 {
 		m.canceled = true
@@ -88,6 +155,42 @@ func (m choicePromptModel) submit() (tea.Model, tea.Cmd) {
 	m.selected = m.choices[m.cursor].Value
 	m.submitted = true
 	return m, tea.Quit
+}
+
+func (m multiChoicePromptModel) submit() (tea.Model, tea.Cmd) {
+	if len(m.choices) == 0 {
+		m.canceled = true
+		return m, tea.Quit
+	}
+	m.selected = nil
+	for _, choice := range m.choices {
+		if choice.Selected {
+			m.selected = append(m.selected, choice.Value)
+		}
+	}
+	if m.requireSelection && len(m.selected) == 0 {
+		m.errText = "Select at least one item, or press Esc to cancel."
+		return m, nil
+	}
+	m.submitted = true
+	return m, tea.Quit
+}
+
+func (m *multiChoicePromptModel) toggleAll() {
+	if len(m.choices) == 0 {
+		return
+	}
+	allSelected := true
+	for _, choice := range m.choices {
+		if !choice.Selected {
+			allSelected = false
+			break
+		}
+	}
+	for idx := range m.choices {
+		m.choices[idx].Selected = !allSelected
+	}
+	m.errText = ""
 }
 
 func (m choicePromptModel) View() string {
@@ -122,6 +225,46 @@ func (m choicePromptModel) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString("Use arrow keys, shortcuts, or enter. Esc cancels.\n")
+	return b.String()
+}
+
+func (m multiChoicePromptModel) View() string {
+	var b strings.Builder
+	if m.title != "" {
+		b.WriteString(m.title)
+		b.WriteString("\n")
+	}
+	for _, line := range m.description {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if len(m.description) > 0 {
+		b.WriteString("\n")
+	}
+	for idx, choice := range m.choices {
+		cursor := " "
+		if idx == m.cursor {
+			cursor = ">"
+		}
+		marker := " "
+		if choice.Selected {
+			marker = "x"
+		}
+		fmt.Fprintf(&b, "%s [%s] %s\n", cursor, marker, choice.Label)
+		if choice.Description != "" {
+			fmt.Fprintf(&b, "      %s\n", choice.Description)
+		}
+	}
+	if m.errText != "" {
+		b.WriteString("\n")
+		b.WriteString(m.errText)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("Space toggles. A toggles all. Enter submits. Esc cancels.\n")
 	return b.String()
 }
 
@@ -226,6 +369,21 @@ func promptChoiceTUI(in io.Reader, out io.Writer, title string, description []st
 	model, ok := final.(choicePromptModel)
 	if !ok || model.canceled || !model.submitted {
 		return "", commandError(ExitUserCanceled, "user_canceled", "Prompt was canceled", nil)
+	}
+	return model.selected, nil
+}
+
+func promptMultiChoiceTUI(in io.Reader, out io.Writer, title string, description []string, choices []tuiMultiChoice, requireSelection bool) ([]string, error) {
+	if len(choices) == 0 {
+		return nil, commandError(ExitValidationError, "validation_failed", "Prompt has no choices", nil)
+	}
+	final, err := runTUIPrompt(in, out, newMultiChoicePromptModel(title, description, choices, requireSelection))
+	if err != nil {
+		return nil, commandError(ExitUserCanceled, "user_canceled", "Prompt could not read input", err)
+	}
+	model, ok := final.(multiChoicePromptModel)
+	if !ok || model.canceled || !model.submitted {
+		return nil, commandError(ExitUserCanceled, "user_canceled", "Prompt was canceled", nil)
 	}
 	return model.selected, nil
 }

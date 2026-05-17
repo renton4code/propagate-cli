@@ -46,16 +46,16 @@ When **PIN invite codes** exist for the team (planned), interactive `propagate t
 Preview the join request:
 
 ```bash
-propagate team join --handle <handle> --role developers --scope dev=read --dry-run --json --non-interactive
+propagate team join --handle <handle> --scope dev=read --dry-run --json --non-interactive
 ```
 
 Write the Git-reviewed request:
 
 ```bash
-propagate team join --handle <handle> --role developers --scope dev=read --non-interactive
+propagate team join --handle <handle> --scope dev=read --non-interactive
 ```
 
-Commit the resulting `propagate.yaml` change and ask an admin to review it before `propagate config push`.
+Commit the resulting `propagate.yaml` change and ask a management member to review it before `propagate config push`.
 
 ## Approve Or Decline Pending Joins
 
@@ -111,7 +111,7 @@ propagate scope create staging --env-file .env.staging --non-interactive
 
 Use `propagate config edit` after scope creation to add env file mappings or move declaration metadata into the new scope. Scope creation does not copy metadata or values from existing scopes.
 
-The scope becomes cloud-visible only after an admin reviews and runs `propagate config push`.
+The scope becomes cloud-visible only after a management member reviews and runs `propagate config push`.
 
 After publication, seed the mapped target env file locally and use `propagate env push --scope staging --dry-run` to preview the encrypted upload. Keep env values out of chat, docs, tests, and pull request text.
 

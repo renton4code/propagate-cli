@@ -332,3 +332,40 @@ func TestEnvPushNonInteractiveRequiresYes(t *testing.T) {
 		t.Fatalf("stderr missing --yes guidance:\n%s", stderr.String())
 	}
 }
+
+func TestEnvPushSelectionFiltersDiffAndSummaries(t *testing.T) {
+	added := envVarKey{Path: ".env", Name: "ADDED"}
+	changed := envVarKey{Path: ".env", Name: "CHANGED"}
+	removed := envVarKey{Path: ".env", Name: "REMOVED"}
+	unchanged := envVarKey{Path: ".env", Name: "UNCHANGED"}
+	diff := envPushDiff{
+		Added:     []envVarKey{added},
+		Changed:   []envVarKey{changed},
+		Removed:   []envVarKey{removed},
+		Unchanged: []envVarKey{unchanged},
+	}
+
+	approved := selectEnvPushDiff(diff, map[envVarKey]bool{
+		added:   true,
+		removed: true,
+	})
+	skipped := skippedEnvPushDiff(diff, approved)
+
+	if len(approved.Added) != 1 || len(approved.Changed) != 0 || len(approved.Removed) != 1 || len(approved.Unchanged) != 1 {
+		t.Fatalf("approved diff = %+v", approved)
+	}
+	if len(skipped.Added) != 0 || len(skipped.Changed) != 1 || skipped.Changed[0] != changed || len(skipped.Removed) != 0 {
+		t.Fatalf("skipped diff = %+v", skipped)
+	}
+
+	var result EnvPushResult
+	applyEnvPushSummaryToResult(&result, approved, skipped)
+	if result.VariablesAddedCount != 1 || result.VariablesChangedCount != 0 || result.VariablesRemovedCount != 1 || result.VariablesSkippedCount != 1 {
+		t.Fatalf("result counts = %+v", result)
+	}
+
+	files := applyEnvPushDiffsToFiles([]EnvPushFile{{Path: ".env"}}, approved, skipped)
+	if len(files) != 1 || files[0].VariablesAdded != 1 || files[0].VariablesRemoved != 1 || files[0].VariablesSkipped != 1 {
+		t.Fatalf("file summary = %+v", files)
+	}
+}

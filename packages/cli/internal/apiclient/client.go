@@ -119,6 +119,7 @@ type ConfigDecision struct {
 	PublicKeySHA string `json:"public_key_sha,omitempty"`
 	Scope        string `json:"scope,omitempty"`
 	Role         string `json:"role,omitempty"`
+	Management   bool   `json:"management,omitempty"`
 	Permission   string `json:"permission,omitempty"`
 }
 
@@ -149,11 +150,11 @@ type JoinerInvitesData struct {
 
 // CreateTeamInviteRequest creates a PIN-backed invite (admin only).
 type CreateTeamInviteRequest struct {
-	OperationID     string            `json:"operation_id"`
-	Label             string            `json:"label"`
-	RequestedRole     string            `json:"requested_role,omitempty"`
-	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
-	Client            ClientMetadata    `json:"client,omitempty"`
+	OperationID         string            `json:"operation_id"`
+	Label               string            `json:"label"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	Client              ClientMetadata    `json:"client,omitempty"`
 }
 
 // CreateTeamInviteResult includes the PIN once at creation time.
@@ -165,13 +166,13 @@ type CreateTeamInviteResult struct {
 
 // InvitePINRequest redeems an invite for a joiner's identity (signed).
 type InvitePINRequest struct {
-	OperationID     string            `json:"operation_id"`
-	PIN             string            `json:"pin"`
-	Joiner          PublicIdentity    `json:"joiner"`
-	Handle          string            `json:"handle"`
-	RequestedRole   string            `json:"requested_role,omitempty"`
-	RequestedScopes map[string]string `json:"requested_scopes,omitempty"`
-	Client          ClientMetadata    `json:"client,omitempty"`
+	OperationID         string            `json:"operation_id"`
+	PIN                 string            `json:"pin"`
+	Joiner              PublicIdentity    `json:"joiner"`
+	Handle              string            `json:"handle"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	Client              ClientMetadata    `json:"client,omitempty"`
 }
 
 // InvitePINResult is returned after a successful PIN verification.
@@ -183,13 +184,13 @@ type InvitePINResult struct {
 
 // AdminInviteRow is an operational view of invite state (admin only).
 type AdminInviteRow struct {
-	InviteID           string `json:"invite_id"`
-	Label              string `json:"label"`
-	Status             string `json:"status"`
-	FailedPINAttempts  int    `json:"failed_pin_attempts"`
-	CreatedAt          string `json:"created_at"`
-	RedeemedAt         string `json:"redeemed_at,omitempty"`
-	RedeemedByKeySHA   string `json:"redeemed_by_key_sha,omitempty"`
+	InviteID          string `json:"invite_id"`
+	Label             string `json:"label"`
+	Status            string `json:"status"`
+	FailedPINAttempts int    `json:"failed_pin_attempts"`
+	CreatedAt         string `json:"created_at"`
+	RedeemedAt        string `json:"redeemed_at,omitempty"`
+	RedeemedByKeySHA  string `json:"redeemed_by_key_sha,omitempty"`
 }
 
 // AdminInvitesData lists invites for a team (admin only).
@@ -318,8 +319,10 @@ type PublicIdentity struct {
 
 type Member struct {
 	PublicIdentity
-	Role   string `json:"role"`
-	Status string `json:"status"`
+	Role       string            `json:"role,omitempty"`
+	Management bool              `json:"management,omitempty"`
+	Scopes     map[string]string `json:"scopes,omitempty"`
+	Status     string            `json:"status"`
 }
 
 type TeamSummary struct {

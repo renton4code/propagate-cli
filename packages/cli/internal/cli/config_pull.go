@@ -146,7 +146,7 @@ func runConfigPull(opts configPullOptions, streams Streams) (ConfigPullResult, e
 
 	pulled, err := config.ParseSnapshot(cloud.ConfigSnapshot, cloud.ConfigRevision)
 	if err != nil {
-		return ConfigPullResult{}, commandError(ExitValidationError, "config_invalid", "Cloud config snapshot is invalid", err, "Contact a Propagate admin before overwriting local config.")
+		return ConfigPullResult{}, commandError(ExitValidationError, "config_invalid", "Cloud config snapshot is invalid", err, "Contact a Propagate management member before overwriting local config.")
 	}
 	if pulled.TeamID != project.TeamID {
 		return ConfigPullResult{}, commandError(ExitValidationError, "config_invalid", "Cloud config belongs to a different team", fmt.Errorf("local team %s, cloud team %s", project.TeamID, pulled.TeamID))

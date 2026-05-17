@@ -49,6 +49,7 @@ create table if not exists members (
   signing_public_key text not null,
   encryption_public_key text not null,
   role text not null,
+  management boolean not null default false,
   status text not null default 'active',
   approved_by_key_sha text,
   approved_at timestamptz,
