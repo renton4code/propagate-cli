@@ -891,15 +891,16 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 
 1. User runs `propagate run --scope dev -- COMMAND [args...]`.
 2. CLI loads identity and config.
-3. CLI sends the same signed read request used by env pull.
-4. Server verifies read access and returns encrypted secret versions plus the member's active scope key envelope.
-5. CLI decrypts the scope key locally.
-6. CLI decrypts env values locally.
-7. CLI flattens values into `NAME=value` process environment entries.
-8. If two configured env files in the selected scope contain the same variable name, CLI refuses before starting the child process because process environments cannot preserve file-path identity.
-9. CLI records a safe injection audit event through the pull-event endpoint with client kind `cli_run`.
-10. CLI starts the child process with inherited stdin, stdout, stderr, working directory, and environment plus injected values. Injected values override inherited variables with the same name.
-11. CLI exits with the child process exit code.
+3. CLI pulls the latest cloud config and updates `propagate.yaml`; if local config changes would be overwritten, the CLI requires confirmation or `--yes`.
+4. CLI sends the same signed read request used by env pull.
+5. Server verifies read access and returns encrypted secret versions plus the member's active scope key envelope.
+6. CLI decrypts the scope key locally.
+7. CLI decrypts env values locally.
+8. CLI flattens values into `NAME=value` process environment entries.
+9. If two configured env files in the selected scope contain the same variable name, CLI refuses before starting the child process because process environments cannot preserve file-path identity.
+10. CLI records a safe injection audit event through the pull-event endpoint with client kind `cli_run`.
+11. CLI starts the child process with inherited stdin, stdout, stderr, working directory, and environment plus injected values. Injected values override inherited variables with the same name.
+12. CLI exits with the child process exit code.
 
 `propagate run` must not write local env files or print decrypted values in Propagate-owned output. It also cannot guarantee child output safety: once values are injected, the child process can read, log, print, or pass them to descendants.
 

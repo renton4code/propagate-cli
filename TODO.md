@@ -1,5 +1,3 @@
-- Propagate run should pull always
-- unified status command that is equivalent of separate statuses
 - env push should allow in TUI to select variables to push instead all or nothing
 - more granular roles model, for example:
 ```

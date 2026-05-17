@@ -56,6 +56,7 @@ func TestProcessRunInjectsValuesIntoChildProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cloudConfig := testConfigData(t, project)
 	bundle := encryptedPullBundle(t, ident, project.TeamID, map[string]string{
 		"API_TOKEN":    "cloud-token",
 		"DATABASE_URL": "postgres://db",
@@ -71,6 +72,8 @@ func TestProcessRunInjectsValuesIntoChildProcess(t *testing.T) {
 			return nil, handlerErr
 		}
 		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			return testResponse(t, http.StatusOK, cloudConfig), nil
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/scopes/dev/pull-bundle"):
 			return testResponse(t, http.StatusOK, bundle), nil
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/events/pull"):
@@ -146,6 +149,151 @@ func TestProcessRunInjectsValuesIntoChildProcess(t *testing.T) {
 	}
 }
 
+func TestProcessRunPullsConfigBeforeBundleWhenScopeMissingLocally(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var initStdout, initStderr bytes.Buffer
+	code := Run([]string{
+		"init",
+		"--handle", "alice@example.com",
+		"--team-name", "Acme API",
+		"--yes",
+		"--non-interactive",
+		"--skip-agent-guidance",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &initStdout,
+		Err:     &initStderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
+	}
+	setConfigRevision(t, repo, "rev_00001")
+
+	ident, err := identity.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findScopeSummary(project.Scopes, "staging") != nil {
+		t.Fatalf("test setup expected staging to be absent locally")
+	}
+	cloudProject := project
+	cloudProject.CloudRevision = "rev_00002"
+	cloudProject.SyncStatus = "synced"
+	cloudProject.Scopes = append(cloudProject.Scopes, config.ScopeSummary{
+		Name:              "staging",
+		EnvFiles:          []string{".env.staging"},
+		DefaultRoleAccess: map[string]string{"developers": "read", "admins": "write"},
+	})
+	cloudConfig := testConfigData(t, cloudProject)
+	bundle := encryptedPullBundleForScopeAndFiles(t, ident, project.TeamID, "staging", map[envVarKey]string{
+		{Path: ".env.staging", Name: "API_TOKEN"}: "staging-token",
+	})
+	bundle.ConfigRevision = "rev_00002"
+
+	var sawConfig bool
+	var sawBundle bool
+	var sawEvent bool
+	var handlerErr error
+	previousClient := configPushHTTPClient
+	t.Cleanup(func() { configPushHTTPClient = previousClient })
+	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get(apiclient.HeaderPublicKeySHA) == "" || r.Header.Get(apiclient.HeaderSignature) == "" {
+			handlerErr = fmt.Errorf("request missing signing headers")
+			return nil, handlerErr
+		}
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			sawConfig = true
+			return testResponse(t, http.StatusOK, cloudConfig), nil
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/scopes/staging/pull-bundle"):
+			if !sawConfig {
+				handlerErr = fmt.Errorf("pull bundle was requested before config")
+				return nil, handlerErr
+			}
+			sawBundle = true
+			return testResponse(t, http.StatusOK, bundle), nil
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/events/pull"):
+			sawEvent = true
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			var request apiclient.PullEventRequest
+			if err := json.Unmarshal(body, &request); err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			if request.Scope != "staging" || request.ConfigRevision != "rev_00002" || request.VariablesCount != 1 || request.Client.ClientKind != "cli_run" {
+				handlerErr = fmt.Errorf("unexpected process injection event: %+v", request)
+				return nil, handlerErr
+			}
+			if len(request.EnvFilePaths) != 1 || request.EnvFilePaths[0] != ".env.staging" {
+				handlerErr = fmt.Errorf("unexpected event file paths: %+v", request.EnvFilePaths)
+				return nil, handlerErr
+			}
+			return testResponse(t, http.StatusOK, map[string]any{"event_id": "audit_00001", "recorded_count": float64(1)}), nil
+		default:
+			handlerErr = fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, handlerErr
+		}
+	}), Timeout: 2 * time.Second}
+
+	t.Setenv("PROPAGATE_TEST_PROCESS_RUN_HELPER", "1")
+	t.Setenv("PROPAGATE_TEST_EXPECT_API_TOKEN", "staging-token")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code = Run([]string{
+		"run",
+		"--api-url", "http://propagate.test",
+		"--scope", "staging",
+		"--",
+		exe, "-test.run=TestProcessRunChildHelper",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("process run exit = %d, stdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if handlerErr != nil {
+		t.Fatal(handlerErr)
+	}
+	if !sawConfig {
+		t.Fatalf("fake API did not receive config pull request")
+	}
+	if !sawBundle {
+		t.Fatalf("fake API did not receive pull bundle request")
+	}
+	if !sawEvent {
+		t.Fatalf("fake API did not receive process injection event")
+	}
+	pulled, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pulled.CloudRevision != "rev_00002" || findScopeSummary(pulled.Scopes, "staging") == nil {
+		t.Fatalf("process run did not pull cloud config:\n%s", readConfig(t, repo))
+	}
+	if strings.TrimSpace(stdout.String()) != "child-ok" {
+		t.Fatalf("child stdout = %q", stdout.String())
+	}
+}
+
 func TestProcessRunReturnsChildExitCode(t *testing.T) {
 	repo := initGitRepo(t)
 	home := t.TempDir()
@@ -176,12 +324,15 @@ func TestProcessRunReturnsChildExitCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cloudConfig := testConfigData(t, project)
 	bundle := encryptedPullBundle(t, ident, project.TeamID, map[string]string{"API_TOKEN": "cloud-token"})
 
 	previousClient := configPushHTTPClient
 	t.Cleanup(func() { configPushHTTPClient = previousClient })
 	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			return testResponse(t, http.StatusOK, cloudConfig), nil
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/scopes/dev/pull-bundle"):
 			return testResponse(t, http.StatusOK, bundle), nil
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/events/pull"):
@@ -256,6 +407,7 @@ func TestProcessRunRejectsDuplicateVariableNamesAcrossFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cloudConfig := testConfigData(t, project)
 	bundle := encryptedPullBundleForFiles(t, ident, project.TeamID, map[envVarKey]string{
 		{Path: ".env", Name: "API_TOKEN"}:       "first-secret",
 		{Path: ".env.local", Name: "API_TOKEN"}: "second-secret",
@@ -265,6 +417,9 @@ func TestProcessRunRejectsDuplicateVariableNamesAcrossFiles(t *testing.T) {
 	previousClient := configPushHTTPClient
 	t.Cleanup(func() { configPushHTTPClient = previousClient })
 	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config") {
+			return testResponse(t, http.StatusOK, cloudConfig), nil
+		}
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/scopes/dev/pull-bundle") {
 			return testResponse(t, http.StatusOK, bundle), nil
 		}
@@ -339,11 +494,16 @@ func TestProcessRunChildHelper(t *testing.T) {
 
 func encryptedPullBundleForFiles(t *testing.T, ident identity.Identity, teamID string, values map[envVarKey]string) apiclient.PullBundleData {
 	t.Helper()
+	return encryptedPullBundleForScopeAndFiles(t, ident, teamID, "dev", values)
+}
+
+func encryptedPullBundleForScopeAndFiles(t *testing.T, ident identity.Identity, teamID string, scope string, values map[envVarKey]string) apiclient.PullBundleData {
+	t.Helper()
 	scopeKey, err := secretcrypto.GenerateScopeKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	encryptedScopeKey, err := secretcrypto.EncryptScopeKey(scopeKey, ident.EncryptionPublicKey, "dev", ident.PublicKeySHA, 1)
+	encryptedScopeKey, err := secretcrypto.EncryptScopeKey(scopeKey, ident.EncryptionPublicKey, scope, ident.PublicKeySHA, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +516,7 @@ func encryptedPullBundleForFiles(t *testing.T, ident identity.Identity, teamID s
 	sortEnvKeys(keys)
 	var versions []apiclient.SecretVersionRecord
 	for _, key := range keys {
-		ciphertext, nonce, err := secretcrypto.EncryptValue(scopeKey, teamID, "dev", key.Path, key.Name, 1, values[key])
+		ciphertext, nonce, err := secretcrypto.EncryptValue(scopeKey, teamID, scope, key.Path, key.Name, 1, values[key])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -376,11 +536,11 @@ func encryptedPullBundleForFiles(t *testing.T, ident identity.Identity, teamID s
 	}
 	sort.Strings(envFiles)
 	return apiclient.PullBundleData{
-		Scope:           apiclient.ScopeRef{Name: "dev"},
+		Scope:           apiclient.ScopeRef{Name: scope},
 		ConfigRevision:  "rev_00001",
 		EnvFileMappings: envFiles,
 		ScopeKeyEnvelope: apiclient.ScopeKeyEnvelope{
-			Scope:             "dev",
+			Scope:             scope,
 			RecipientKeySHA:   ident.PublicKeySHA,
 			ScopeKeyVersion:   1,
 			EncryptedScopeKey: encryptedScopeKey,

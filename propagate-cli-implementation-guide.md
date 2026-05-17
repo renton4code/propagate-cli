@@ -619,15 +619,17 @@ Local reads:
 
 API calls:
 
+- `GET /v1/teams/{team_id}/config`
 - `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle`
 - `POST /v1/teams/{team_id}/events/pull` with client kind `cli_run`
 
 Local writes:
 
-- None.
+- `propagate.yaml` when the cloud config differs. If local config changes would be overwritten, require confirmation or `--yes`.
 
 Execution behavior:
 
+- Pull and validate the latest cloud config before selecting scope metadata.
 - Decrypt values locally using the same pull-bundle path as `env pull`.
 - Append decrypted `NAME=value` entries after the inherited environment so cloud values override existing variables for the child process.
 - Preserve stdin, stdout, stderr, and working directory.

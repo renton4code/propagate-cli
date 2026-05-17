@@ -73,10 +73,11 @@ func runProcessCommand(args []string, global globalOptions, streams Streams) int
 		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
 	}
 
-	if err := confirmProcessRun(opts, bufio.NewReader(streams.In), streams.In, streams.Out); err != nil {
+	reader := bufio.NewReader(streams.In)
+	if err := confirmProcessRun(opts, reader, streams.In, streams.Out); err != nil {
 		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
-	result, err := prepareProcessEnv(opts, streams)
+	result, err := prepareProcessEnv(opts, streams, reader)
 	if err != nil {
 		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
@@ -99,7 +100,7 @@ func commandSeparatorIndex(args []string) int {
 	return -1
 }
 
-func prepareProcessEnv(opts processRunOptions, streams Streams) (decryptedProcessEnv, error) {
+func prepareProcessEnv(opts processRunOptions, streams Streams, reader *bufio.Reader) (decryptedProcessEnv, error) {
 	scopeName := strings.TrimSpace(opts.Scope)
 	if scopeName == "" {
 		scopeName = "dev"
@@ -130,17 +131,19 @@ func prepareProcessEnv(opts processRunOptions, streams Streams) (decryptedProces
 	if err != nil {
 		return decryptedProcessEnv{}, commandError(ExitValidationError, "config_invalid", "Cannot read propagate.yaml", err)
 	}
-	localScope := findScopeSummary(project.Scopes, scopeName)
-	if localScope == nil {
-		return decryptedProcessEnv{}, commandError(ExitValidationError, "scope_not_found", fmt.Sprintf("Scope %q is not configured in propagate.yaml", scopeName), nil, "Run `propagate config pull` if the scope was added in the cloud.")
-	}
-
 	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
 	if apiURL == "" {
 		return decryptedProcessEnv{}, commandError(ExitCloudUnavailable, "cloud_unavailable", "Propagate API URL is required for process injection", nil, "Pass `--api-url` or set PROPAGATE_API_URL.")
 	}
 	client := apiclient.Client{BaseURL: apiURL, HTTPClient: configPushHTTPClient, CLIVersion: Version}
-	bundle, err := client.PullBundle(context.Background(), ident, project.TeamID, scopeName)
+	ctx := context.Background()
+	project, err = pullConfigBeforeProcessRun(ctx, client, ident, configPath, project, opts, reader, streams.In, streams.Out)
+	if err != nil {
+		return decryptedProcessEnv{}, err
+	}
+	localScope := findScopeSummary(project.Scopes, scopeName)
+
+	bundle, err := client.PullBundle(ctx, ident, project.TeamID, scopeName)
 	if err != nil {
 		return decryptedProcessEnv{}, mapProcessRunAPIError(err, scopeName, summary)
 	}
@@ -167,7 +170,11 @@ func prepareProcessEnv(opts processRunOptions, streams Streams) (decryptedProces
 	if err != nil {
 		return decryptedProcessEnv{}, commandError(ExitValidationError, "decrypt_failed", "Cannot decrypt one or more env values for process injection", err, "No process was started.")
 	}
-	filePaths := pullFilePaths(localScope.EnvFiles, bundle.EnvFileMappings, valuesByFile)
+	var localEnvFiles []string
+	if localScope != nil {
+		localEnvFiles = localScope.EnvFiles
+	}
+	filePaths := pullFilePaths(localEnvFiles, bundle.EnvFileMappings, valuesByFile)
 	return decryptedProcessEnv{
 		Ident:          ident,
 		Project:        project,
@@ -178,6 +185,54 @@ func prepareProcessEnv(opts processRunOptions, streams Streams) (decryptedProces
 		FilePaths:      filePaths,
 		VariablesCount: len(bundle.SecretVersions),
 	}, nil
+}
+
+func pullConfigBeforeProcessRun(ctx context.Context, client apiclient.Client, ident identity.Identity, configPath string, project config.ParsedProject, opts processRunOptions, reader *bufio.Reader, in io.Reader, out io.Writer) (config.ParsedProject, error) {
+	cloud, err := client.GetConfig(ctx, ident, project.TeamID)
+	if err != nil {
+		return config.ParsedProject{}, mapAPIError(err, "Cannot pull cloud config before process injection")
+	}
+	pulled, err := config.ParseSnapshot(cloud.ConfigSnapshot, cloud.ConfigRevision)
+	if err != nil {
+		return config.ParsedProject{}, commandError(ExitValidationError, "config_invalid", "Cloud config snapshot is invalid", err, "No process was started.")
+	}
+	if pulled.TeamID != project.TeamID {
+		return config.ParsedProject{}, commandError(ExitValidationError, "config_invalid", "Cloud config belongs to a different team", fmt.Errorf("local team %s, cloud team %s", project.TeamID, pulled.TeamID), "No process was started.")
+	}
+	localHash, err := config.ConfigHash(project)
+	if err != nil {
+		return config.ParsedProject{}, commandError(ExitValidationError, "config_invalid", "Cannot normalize local propagate.yaml before process injection", err, "No process was started.")
+	}
+	pulledHash, err := config.ConfigHash(pulled)
+	if err != nil {
+		return config.ParsedProject{}, commandError(ExitValidationError, "config_invalid", "Cannot normalize pulled cloud config before process injection", err, "No process was started.")
+	}
+	if cloud.ConfigHash != "" && pulledHash != cloud.ConfigHash {
+		return config.ParsedProject{}, commandError(ExitValidationError, "config_invalid", "Cloud config hash does not match the pulled snapshot", fmt.Errorf("expected %s, got %s", cloud.ConfigHash, pulledHash), "No process was started.")
+	}
+	if project.CloudRevision == cloud.ConfigRevision && localHash == pulledHash && project.SyncStatus == "synced" {
+		return project, nil
+	}
+	if hasLocalUnpushedConfig(project, localHash, cloud.ConfigRevision, pulledHash) && !opts.Yes {
+		if opts.NonInteractive {
+			return config.ParsedProject{}, commandError(ExitConfirmationRequired, "confirmation_required", "Non-interactive process injection requires --yes before overwriting local config changes", nil, "Re-run with `--yes` after reviewing `propagate config pull --dry-run`.")
+		}
+		ok, err := promptConfirm(reader, in, out, "Overwrite local propagate.yaml with the cloud config before process injection?", false)
+		if err != nil {
+			return config.ParsedProject{}, err
+		}
+		if !ok {
+			return config.ParsedProject{}, commandError(ExitUserCanceled, "user_canceled", "Process injection was canceled before pulling cloud config", nil)
+		}
+	}
+	rendered, err := config.RenderParsed(pulled)
+	if err != nil {
+		return config.ParsedProject{}, commandError(ExitValidationError, "config_invalid", "Cloud config snapshot cannot be rendered as propagate.yaml", err, "No process was started.")
+	}
+	if err := config.WriteRaw(configPath, rendered); err != nil {
+		return config.ParsedProject{}, commandError(ExitPartialLocalFailure, "partial_local_failure", "Cloud config was fetched but propagate.yaml could not be updated", err, "No process was started.")
+	}
+	return pulled, nil
 }
 
 func processEnvAssignments(valuesByFile map[string]map[string]string) ([]string, error) {
@@ -291,7 +346,7 @@ func printProcessRunHelp(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  --scope VALUE       scope to inject (default dev)")
-	fmt.Fprintln(w, "  --yes               confirm prod process injection")
+	fmt.Fprintln(w, "  --yes               confirm prod process injection and config overwrite")
 	fmt.Fprintln(w, "  --api-url VALUE     override Propagate API URL")
 	fmt.Fprintln(w, "  --json              render machine-readable errors")
 	fmt.Fprintln(w, "  --non-interactive   fail instead of prompting")

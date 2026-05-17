@@ -11,13 +11,13 @@ When command usage is unclear, run `propagate --help`, `propagate <group> --help
 
 ## Inspect A Repository
 
-Use read-only status commands before changing anything:
+Use unified read-only status before changing anything:
 
 ```bash
-propagate config status --json --non-interactive
-propagate team status --json --non-interactive
-propagate env status --scope dev --json --non-interactive
+propagate status --scope dev --json --non-interactive
 ```
+
+Use `propagate config status`, `propagate team status`, or `propagate env status --scope dev` when you only need one area.
 
 If the cloud cannot be reached, pass `--api-url VALUE` or configure it outside docs and prompts.
 
@@ -62,8 +62,7 @@ Commit the resulting `propagate.yaml` change and ask an admin to review it befor
 Inspect the pending state:
 
 ```bash
-propagate team status --json --non-interactive
-propagate config status --json --non-interactive
+propagate status --json --non-interactive
 ```
 
 Preview decisions:
@@ -134,7 +133,7 @@ The preferred way to use secrets locally. No `.env` files written to disk — se
 propagate run --scope dev -- npm run dev
 ```
 
-`propagate run` decrypts values locally and passes them only to the child process environment. It does not write `.env` files, and injected cloud values override inherited environment variables with the same names for that child process.
+`propagate run` refreshes `propagate.yaml` from the cloud, decrypts values locally, and passes them only to the child process environment. It does not write `.env` files, and injected cloud values override inherited environment variables with the same names for that child process.
 
 Do not use `propagate run` to inspect or print secrets. Child process output is not sanitized by Propagate, so avoid commands such as `env`, `printenv`, or debugging tools that dump environment variables.
 
@@ -203,8 +202,7 @@ Never pass the value as a positional argument. Never show the value in terminal 
 When a command reports permission denied, pending join required, stale config revision, or missing scope access, stop and report the blocker. The usual safe next commands are:
 
 ```bash
-propagate team status --json --non-interactive
-propagate config status --json --non-interactive
+propagate status --json --non-interactive
 propagate config pull --dry-run --json --non-interactive
 ```
 

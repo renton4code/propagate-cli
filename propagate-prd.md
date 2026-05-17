@@ -567,16 +567,17 @@ Default scope is `dev`. The `--` separator is required so Propagate flags are cl
 #### Behavior
 
 1. Read `propagate.yaml`.
-2. Determine env file mappings and variable metadata for the selected scope.
-3. Check whether the user has read access to the scope.
-4. Fetch the encrypted pull bundle from the cloud.
-5. Decrypt the scope key and env values locally.
-6. Flatten decrypted values into process environment entries.
-7. Refuse to start the child process if the same variable name appears in multiple env files for the selected scope.
-8. Start the child command with inherited environment variables plus injected values, where injected values take precedence.
-9. Preserve the caller's stdin, stdout, stderr, and working directory for the child process.
-10. Record a safe process-injection audit event through the pull-event path with client kind `cli_run`.
-11. Return the child process exit code.
+2. Pull the latest cloud config and update `propagate.yaml`; require confirmation or `--yes` before overwriting local config changes.
+3. Determine env file mappings and variable metadata for the selected scope.
+4. Check whether the user has read access to the scope.
+5. Fetch the encrypted pull bundle from the cloud.
+6. Decrypt the scope key and env values locally.
+7. Flatten decrypted values into process environment entries.
+8. Refuse to start the child process if the same variable name appears in multiple env files for the selected scope.
+9. Start the child command with inherited environment variables plus injected values, where injected values take precedence.
+10. Preserve the caller's stdin, stdout, stderr, and working directory for the child process.
+11. Record a safe process-injection audit event through the pull-event path with client kind `cli_run`.
+12. Return the child process exit code.
 
 #### Safety Requirements
 
@@ -1219,7 +1220,7 @@ MVP success metrics:
 - Use `propagate.yaml` instead of `propagate.yalm`. The latter appears to be a typo and will create unnecessary friction.
 - Prefer the term "scope" in the CLI but explain it as "environment" in user-facing setup prompts.
 - Make `dev` the default scope, but require an extra confirmation before importing or writing `prod`.
-- Treat `propagate env pull` as the compatibility path for file-based workflows, and use `propagate run` as the no-write process injection path.
+- Treat `propagate env pull` as the compatibility path for file-based workflows, and use `propagate run` as the process injection path that does not write env files.
 - Add automatic `.gitignore` checks for managed env files.
 - Treat every env value as confidential for storage purposes, even when a user describes it as public.
 - Add a `--dry-run` option to `env push`, `env set`, `env pull`, `config push`, `config edit`, and `scope create`.
