@@ -8,7 +8,7 @@ import type { TerminalDef } from "../components/TerminalFlow";
 const terminals: TerminalDef[] = [
   {
     step: "01",
-    label: "Management member sets up project",
+    label: "Set up a project",
     user: "maya@acme",
     dir: "~/my-project",
     lines: [
@@ -32,7 +32,7 @@ const terminals: TerminalDef[] = [
   },
   {
     step: "02",
-    label: "Management member creates invite",
+    label: "Invite a developer",
     user: "maya@acme",
     dir: "~/my-project",
     lines: [
@@ -53,7 +53,7 @@ const terminals: TerminalDef[] = [
   },
   {
     step: "03",
-    label: "Developer joins with invite code",
+    label: "Developer joins",
     user: "sarah@acme",
     dir: "~/my-project",
     lines: [
@@ -83,7 +83,7 @@ const terminals: TerminalDef[] = [
   },
   {
     step: "04",
-    label: "Developer runs the app with secrets",
+    label: "Developer runs the app with secrets or pulls .env file",
     user: "sarah@acme",
     dir: "~/my-project",
     lines: [
