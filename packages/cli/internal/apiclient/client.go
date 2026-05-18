@@ -148,12 +148,28 @@ type JoinerInvitesData struct {
 	Invites []JoinerInviteRow `json:"invites"`
 }
 
+// RelayScopeKey is a scope key encrypted to the server relay public key.
+type RelayScopeKey struct {
+	Scope             string `json:"scope"`
+	EncryptedScopeKey string `json:"encrypted_scope_key"`
+	Algorithm         string `json:"algorithm"`
+	ScopeKeyVersion   int    `json:"scope_key_version"`
+	RelayKeyVersion   int    `json:"relay_key_version"`
+}
+
+// RelayPublicKeyData is returned by GET /v1/relay-public-key.
+type RelayPublicKeyData struct {
+	RelayPublicKey  string `json:"relay_public_key"`
+	RelayKeyVersion int    `json:"relay_key_version"`
+}
+
 // CreateTeamInviteRequest creates a PIN-backed invite (admin only).
 type CreateTeamInviteRequest struct {
 	OperationID         string            `json:"operation_id"`
 	Label               string            `json:"label"`
 	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	ScopeKeyBundle      []RelayScopeKey   `json:"scope_key_bundle,omitempty"`
 	Client              ClientMetadata    `json:"client,omitempty"`
 }
 
@@ -177,9 +193,12 @@ type InvitePINRequest struct {
 
 // InvitePINResult is returned after a successful PIN verification.
 type InvitePINResult struct {
-	RedemptionID string `json:"redemption_id"`
-	InviteID     string `json:"invite_id"`
-	ServerTime   string `json:"server_time"`
+	RedemptionID      string             `json:"redemption_id"`
+	InviteID          string             `json:"invite_id"`
+	ServerTime        string             `json:"server_time"`
+	PreApproved       bool               `json:"pre_approved,omitempty"`
+	ScopeKeyEnvelopes []ScopeKeyEnvelope `json:"scope_key_envelopes,omitempty"`
+	Member            *Member            `json:"member,omitempty"`
 }
 
 // AdminInviteRow is an operational view of invite state (admin only).
@@ -537,6 +556,14 @@ func (c Client) RevokeTeamInvite(ctx context.Context, ident identity.Identity, t
 	body := []byte("{}")
 	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/invites/" + url.PathEscape(inviteID) + "/revoke"
 	return c.do(ctx, ident, http.MethodPost, endpoint, "", body, "", nil)
+}
+
+func (c Client) GetRelayPublicKey(ctx context.Context) (RelayPublicKeyData, error) {
+	var out RelayPublicKeyData
+	if err := c.doPublic(ctx, http.MethodGet, "/v1/relay-public-key", "", &out); err != nil {
+		return RelayPublicKeyData{}, err
+	}
+	return out, nil
 }
 
 func (c Client) doPublic(ctx context.Context, method, endpoint, rawQuery string, out any) error {

@@ -5,12 +5,21 @@ import (
 	"strings"
 )
 
+type RelayScopeKey struct {
+	Scope             string `json:"scope"`
+	EncryptedScopeKey string `json:"encrypted_scope_key"`
+	Algorithm         string `json:"algorithm"`
+	ScopeKeyVersion   int    `json:"scope_key_version"`
+	RelayKeyVersion   int    `json:"relay_key_version"`
+}
+
 type CreateTeamInviteRequest struct {
 	OperationID         string            `json:"operation_id"`
 	Label               string            `json:"label"`
 	RequestedRole       string            `json:"requested_role,omitempty"`
 	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	ScopeKeyBundle      []RelayScopeKey   `json:"scope_key_bundle,omitempty"`
 	Client              ClientMetadata    `json:"client,omitempty"`
 }
 
@@ -115,7 +124,10 @@ func (r InvitePINRequest) Validate() error {
 }
 
 type InvitePINResult struct {
-	RedemptionID string `json:"redemption_id"`
-	InviteID     string `json:"invite_id"`
-	ServerTime   string `json:"server_time"`
+	RedemptionID      string             `json:"redemption_id"`
+	InviteID          string             `json:"invite_id"`
+	ServerTime        string             `json:"server_time"`
+	PreApproved       bool               `json:"pre_approved,omitempty"`
+	ScopeKeyEnvelopes []ScopeKeyEnvelope `json:"scope_key_envelopes,omitempty"`
+	Member            *Member            `json:"member,omitempty"`
 }

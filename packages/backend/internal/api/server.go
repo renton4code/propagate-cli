@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"propagate/backend/internal/domain"
 	"propagate/backend/internal/signing"
 	"propagate/backend/internal/storage"
+	secretcrypto "propagate/shared/secretcrypto"
 )
 
 const (
@@ -33,6 +35,8 @@ type Config struct {
 	RequestSkew           time.Duration
 	MaxBodyBytes          int64
 	Now                   func() time.Time
+	RelayPrivateKey       *ecdh.PrivateKey
+	RelayPublicKey        *ecdh.PublicKey
 }
 
 func ConfigFromEnv() Config {
@@ -50,6 +54,8 @@ func ConfigFromEnv() Config {
 		}
 	}
 
+	relayPrivate, relayPublic := loadRelayKey()
+
 	return Config{
 		APIVersion:            envOrDefault("PROPAGATE_API_VERSION", defaultAPIVersion),
 		MinCLIVersion:         envOrDefault("PROPAGATE_MIN_CLI_VERSION", defaultMinCLI),
@@ -57,7 +63,31 @@ func ConfigFromEnv() Config {
 		RequestSkew:           skew,
 		MaxBodyBytes:          maxBody,
 		Now:                   time.Now,
+		RelayPrivateKey:       relayPrivate,
+		RelayPublicKey:        relayPublic,
 	}
+}
+
+func loadRelayKey() (*ecdh.PrivateKey, *ecdh.PublicKey) {
+	if value := strings.TrimSpace(os.Getenv("PROPAGATE_RELAY_PRIVATE_KEY")); value != "" {
+		raw, err := secretcrypto.ParseX25519Key(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: PROPAGATE_RELAY_PRIVATE_KEY is invalid: %v\n", err)
+			return nil, nil
+		}
+		privKey, err := ecdh.X25519().NewPrivateKey(raw)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: PROPAGATE_RELAY_PRIVATE_KEY could not be loaded: %v\n", err)
+			return nil, nil
+		}
+		return privKey, privKey.PublicKey()
+	}
+	privKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil
+	}
+	fmt.Fprintf(os.Stderr, "info: generated ephemeral relay key (set PROPAGATE_RELAY_PRIVATE_KEY for persistence)\n")
+	return privKey, privKey.PublicKey()
 }
 
 type Server struct {
@@ -98,8 +128,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/v1/version", s.handleVersion)
+	s.mux.HandleFunc("/v1/relay-public-key", s.handleRelayPublicKey)
 	s.mux.HandleFunc("/v1/teams/setup", s.handleTeamSetup)
 	s.mux.HandleFunc("/v1/teams/", s.handleTeamRoutes)
+}
+
+func (s *Server) handleRelayPublicKey(w http.ResponseWriter, r *http.Request) {
+	requestID := requestID()
+	if r.Method != http.MethodGet {
+		s.writeError(w, requestID, "", newAPIError(http.StatusMethodNotAllowed, "usage_error", "method not allowed"))
+		return
+	}
+	if s.config.RelayPublicKey == nil {
+		s.writeError(w, requestID, "", newAPIError(http.StatusServiceUnavailable, "relay_unavailable", "relay encryption is not configured"))
+		return
+	}
+	writeJSON(w, http.StatusOK, Envelope{
+		OK:        true,
+		RequestID: requestID,
+		Data: map[string]any{
+			"relay_public_key": secretcrypto.FormatX25519PublicKey(s.config.RelayPublicKey),
+			"relay_key_version": 1,
+		},
+	})
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {

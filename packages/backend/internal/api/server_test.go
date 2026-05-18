@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 
 	"propagate/backend/internal/signing"
 	"propagate/backend/internal/storage"
+	secretcrypto "propagate/shared/secretcrypto"
 )
 
 func TestVersionEndpoint(t *testing.T) {
@@ -835,4 +837,190 @@ func appendSSHString(dst []byte, value []byte) []byte {
 	dst = append(dst, size[:]...)
 	dst = append(dst, value...)
 	return dst
+}
+
+func TestInviteRelayReEncryptionGrantsImmediateAccess(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	relayPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(storage.NewMemoryStore(), Config{
+		Now:             func() time.Time { return now },
+		RelayPrivateKey: relayPrivate,
+		RelayPublicKey:  relayPrivate.PublicKey(),
+	})
+
+	admin := newTestSigner(t)
+
+	scopeKey, err := secretcrypto.GenerateScopeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminEncPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminEncPub := secretcrypto.FormatX25519PublicKey(adminEncPrivate.PublicKey())
+
+	adminEnvelope, err := secretcrypto.EncryptScopeKey(scopeKey, adminEncPub, "dev", admin.sha, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setupPayload := map[string]any{
+		"operation_id": "op_relay_setup",
+		"team_name":    "Relay Team",
+		"first_admin": map[string]any{
+			"handle":                "admin@example.com",
+			"public_key_sha":        admin.sha,
+			"signing_public_key":    admin.ssh,
+			"encryption_public_key": adminEncPub,
+		},
+		"config_snapshot": map[string]any{
+			"version": float64(1),
+			"team":    map[string]any{"name": "Relay Team"},
+			"scopes":  map[string]any{"dev": map[string]any{"env_files": []any{".env"}}},
+		},
+		"scopes": []any{
+			map[string]any{"name": "dev", "env_files": []any{".env"}},
+		},
+		"scope_key_envelopes": []any{
+			map[string]any{
+				"scope":               "dev",
+				"recipient_key_sha":   admin.sha,
+				"scope_key_version":   float64(1),
+				"encrypted_scope_key": adminEnvelope,
+				"algorithm":           secretcrypto.EnvelopeAlgorithm,
+			},
+		},
+		"client": map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	}
+	setupBody := mustJSON(t, setupPayload)
+	setupRec := httptest.NewRecorder()
+	server.ServeHTTP(setupRec, signedSetupRequest(t, admin, setupBody, now, "nonce-relay-setup"))
+	if setupRec.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, body = %s", setupRec.Code, setupRec.Body.String())
+	}
+	teamID := teamIDFromBody(t, setupRec.Body.Bytes())
+
+	relayPub := secretcrypto.FormatX25519PublicKey(relayPrivate.PublicKey())
+	relayEncrypted, err := secretcrypto.EncryptScopeKey(scopeKey, relayPub, "dev", "relay", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createPayload := mustJSON(t, map[string]any{
+		"operation_id":     "op_relay_inv",
+		"label":            "relay-test",
+		"requested_scopes": map[string]any{"dev": "read"},
+		"scope_key_bundle": []any{
+			map[string]any{
+				"scope":               "dev",
+				"encrypted_scope_key": relayEncrypted,
+				"algorithm":           secretcrypto.EnvelopeAlgorithm,
+				"scope_key_version":   float64(1),
+				"relay_key_version":   float64(1),
+			},
+		},
+		"client": map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	createRec := httptest.NewRecorder()
+	server.ServeHTTP(createRec, signedRequest(t, admin, http.MethodPost, "/v1/teams/"+teamID+"/invites", createPayload, now, "nonce-relay-inv", "op_relay_inv"))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create invite status = %d, body = %s", createRec.Code, createRec.Body.String())
+	}
+	pin := envelopeStringField(t, createRec.Body.Bytes(), "pin")
+	inviteID := envelopeStringField(t, createRec.Body.Bytes(), "invite_id")
+
+	joiner := newTestSigner(t)
+	joinerEncPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinerEncPub := secretcrypto.FormatX25519PublicKey(joinerEncPrivate.PublicKey())
+	joinerSSH := openSSHPublicKey(joiner.public, "joiner@example.com")
+
+	pinBody := mustJSON(t, map[string]any{
+		"operation_id": "op_relay_pin",
+		"pin":          pin,
+		"handle":       "joiner@example.com",
+		"joiner": map[string]any{
+			"handle":                "joiner@example.com",
+			"public_key_sha":        joiner.sha,
+			"signing_public_key":    joinerSSH,
+			"encryption_public_key": joinerEncPub,
+		},
+		"requested_scopes": map[string]any{"dev": "read"},
+		"client":           map[string]any{"cli_version": "test-cli", "client_kind": "test"},
+	})
+	pinRec := httptest.NewRecorder()
+	server.ServeHTTP(pinRec, signedRequest(t, joiner, http.MethodPost, "/v1/teams/"+teamID+"/join/invites/"+inviteID+"/pin", pinBody, now, "nonce-relay-pin", "op_relay_pin"))
+	if pinRec.Code != http.StatusOK {
+		t.Fatalf("pin redeem status = %d, body = %s", pinRec.Code, pinRec.Body.String())
+	}
+
+	var pinEnvelope struct {
+		Data struct {
+			PreApproved       bool `json:"pre_approved"`
+			ScopeKeyEnvelopes []struct {
+				Scope             string `json:"scope"`
+				RecipientKeySHA   string `json:"recipient_key_sha"`
+				EncryptedScopeKey string `json:"encrypted_scope_key"`
+				Algorithm         string `json:"algorithm"`
+				ScopeKeyVersion   int    `json:"scope_key_version"`
+			} `json:"scope_key_envelopes"`
+			Member *struct {
+				Handle string `json:"handle"`
+				Status string `json:"status"`
+			} `json:"member"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(pinRec.Body.Bytes(), &pinEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if !pinEnvelope.Data.PreApproved {
+		t.Fatalf("expected pre_approved=true, got %s", pinRec.Body.String())
+	}
+	if len(pinEnvelope.Data.ScopeKeyEnvelopes) != 1 {
+		t.Fatalf("expected 1 scope key envelope, got %d: %s", len(pinEnvelope.Data.ScopeKeyEnvelopes), pinRec.Body.String())
+	}
+	envelope := pinEnvelope.Data.ScopeKeyEnvelopes[0]
+	if envelope.Scope != "dev" {
+		t.Fatalf("envelope scope = %q, want dev", envelope.Scope)
+	}
+	if envelope.RecipientKeySHA != joiner.sha {
+		t.Fatalf("envelope recipient = %q, want %q", envelope.RecipientKeySHA, joiner.sha)
+	}
+	if envelope.Algorithm != secretcrypto.EnvelopeAlgorithm {
+		t.Fatalf("envelope algorithm = %q, want %q", envelope.Algorithm, secretcrypto.EnvelopeAlgorithm)
+	}
+
+	decrypted, err := secretcrypto.DecryptScopeKeyWithPrivate(joinerEncPrivate, envelope.EncryptedScopeKey, "dev", joiner.sha, 1)
+	if err != nil {
+		t.Fatalf("joiner could not decrypt scope key: %v", err)
+	}
+	if !bytes.Equal(decrypted, scopeKey) {
+		t.Fatal("decrypted scope key does not match original")
+	}
+
+	if pinEnvelope.Data.Member == nil {
+		t.Fatal("expected member in response")
+	}
+	if pinEnvelope.Data.Member.Handle != "joiner@example.com" {
+		t.Fatalf("member handle = %q, want joiner@example.com", pinEnvelope.Data.Member.Handle)
+	}
+	if pinEnvelope.Data.Member.Status != "active" {
+		t.Fatalf("member status = %q, want active", pinEnvelope.Data.Member.Status)
+	}
+
+	pullRec := httptest.NewRecorder()
+	server.ServeHTTP(pullRec, signedRequest(t, joiner, http.MethodGet, "/v1/teams/"+teamID+"/scopes/dev/pull-bundle", nil, now, "nonce-pull-1", ""))
+	if pullRec.Code != http.StatusOK {
+		t.Fatalf("joiner pull-bundle status = %d, body = %s", pullRec.Code, pullRec.Body.String())
+	}
+	if !strings.Contains(pullRec.Body.String(), `"scope_key_envelope"`) {
+		t.Fatalf("pull-bundle missing scope key envelope: %s", pullRec.Body.String())
+	}
 }

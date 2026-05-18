@@ -43,6 +43,7 @@ type TeamJoinResult struct {
 	Init                *InitResult       `json:"init,omitempty"`
 	PendingJoinAdded    bool              `json:"pending_join_added"`
 	WouldAddPendingJoin bool              `json:"would_add_pending_join,omitempty"`
+	PreApproved         bool              `json:"pre_approved,omitempty"`
 	ProjectConfigPath   string            `json:"project_config_path"`
 	IdentityCreated     bool              `json:"identity_created"`
 	IdentityPath        string            `json:"identity_path,omitempty"`
@@ -251,6 +252,41 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		}
 	}
 
+	if inviteMeta != nil && inviteMeta.PreApproved {
+		member := config.Member{
+			Handle:              summary.Handle,
+			PublicKeySHA:        summary.PublicKeySHA,
+			SigningPublicKey:    summary.SigningPublicKey,
+			EncryptionPublicKey: summary.EncryptionPublicKey,
+			Management:         opts.RequestedManagement,
+			Scopes:             requestedScopes,
+		}
+		nextConfig, err := config.RenderWithApprovedMember(project, member)
+		if err != nil {
+			if errors.Is(err, config.ErrAlreadyMember) {
+				return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "This identity is already an active team member", err, "Run `propagate team status` to inspect current membership.")
+			}
+			return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "Cannot add member to propagate.yaml", err)
+		}
+		if opts.DryRun {
+			result.Status = "dry_run"
+			result.NextSteps = []string{"Re-run without `--dry-run` to complete the join."}
+			return result, nil
+		}
+		if err := config.WriteRaw(configPath, nextConfig); err != nil {
+			return TeamJoinResult{}, commandError(ExitPartialLocalFailure, "partial_local_failure", "Could not write member to propagate.yaml", err)
+		}
+		result.PendingJoinAdded = true
+		result.PreApproved = true
+		result.NextSteps = []string{
+			"Access granted. You can now use secrets immediately:",
+			"  propagate run --scope dev -- <your command>",
+			"  propagate env pull --scope dev",
+			"Commit the propagate.yaml change for audit purposes.",
+		}
+		return result, nil
+	}
+
 	request := config.JoinRequest{
 		Handle:              summary.Handle,
 		PublicKeySHA:        summary.PublicKeySHA,
@@ -348,10 +384,14 @@ func renderTeamJoinResult(w io.Writer, jsonOutput bool, noColor bool, result Tea
 	if result.DryRun {
 		renderNote(w, style, "Would add join request to propagate.yaml.")
 		renderNote(w, style, "Mode: dry run; no files were written.")
+	} else if result.PreApproved {
+		renderOK(w, style, "Access granted. Member added to propagate.yaml.")
 	} else {
 		renderOK(w, style, "Join request added to propagate.yaml.")
 	}
-	renderNote(w, style, "You do not have secret access yet.")
+	if !result.PreApproved {
+		renderNote(w, style, "You do not have secret access yet.")
+	}
 	fmt.Fprintln(w)
 
 	if result.Identity != nil {

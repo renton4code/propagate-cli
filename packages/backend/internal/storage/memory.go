@@ -57,6 +57,7 @@ type memoryInvite struct {
 	requestedRole       string
 	requestedManagement bool
 	requestedScopes     map[string]string
+	scopeKeyBundle      []domain.RelayScopeKey
 	createdBy           string
 	createdAt           time.Time
 	redeemedAt          time.Time
@@ -908,6 +909,7 @@ func (s *MemoryStore) CreateTeamInvite(_ context.Context, teamID string, actor d
 		requestedRole:       role,
 		requestedManagement: request.RequestedManagement || role == "admins",
 		requestedScopes:     scopes,
+		scopeKeyBundle:      request.ScopeKeyBundle,
 		createdBy:           actor.PublicKeySHA,
 		createdAt:           time.Now().UTC(),
 	}
@@ -943,7 +945,25 @@ func (s *MemoryStore) ListJoinerInvites(_ context.Context, teamID string) (domai
 	return domain.JoinerInvitesData{Invites: rows}, nil
 }
 
-func (s *MemoryStore) SubmitInvitePIN(_ context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string) (domain.InvitePINResult, error) {
+func (s *MemoryStore) GetInviteScopeKeyBundle(_ context.Context, teamID string, inviteID string) ([]domain.RelayScopeKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team := s.teams[teamID]
+	if team == nil {
+		return nil, ErrNotFound
+	}
+	inv := team.invites[inviteID]
+	if inv == nil {
+		return nil, ErrNotFound
+	}
+	if inv.status != "active" {
+		return nil, ErrInviteNotActive
+	}
+	return inv.scopeKeyBundle, nil
+}
+
+func (s *MemoryStore) SubmitInvitePIN(_ context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string, envelopes []domain.ScopeKeyEnvelope) (domain.InvitePINResult, error) {
 	normPIN, err := domain.NormalizeInvitePIN(request.PIN)
 	if err != nil {
 		return domain.InvitePINResult{}, err
@@ -973,10 +993,62 @@ func (s *MemoryStore) SubmitInvitePIN(_ context.Context, teamID string, inviteID
 			return domain.InvitePINResult{}, rerr
 		}
 		redemptionID := "red_" + hex.EncodeToString(raw)
+
+		preApproved := len(envelopes) > 0
+		var member *domain.Member
+		if preApproved {
+			role := inv.requestedRole
+			if role == "" {
+				role = "developers"
+			}
+			newMember := domain.Member{
+				PublicIdentity: request.Joiner,
+				Role:           role,
+				Management:     inv.requestedManagement,
+				Scopes:         copyStringMap(inv.requestedScopes),
+				Status:         "active",
+			}
+			team.members[request.Joiner.PublicKeySHA] = newMember
+			for scopeName, permission := range inv.requestedScopes {
+				scope := team.scopes[scopeName]
+				if scope == nil {
+					continue
+				}
+				scope.memberAccess[request.Joiner.PublicKeySHA] = permission
+			}
+			for _, envelope := range envelopes {
+				scope := team.scopes[envelope.Scope]
+				if scope == nil {
+					continue
+				}
+				scope.envelopes[envelope.RecipientKeySHA] = envelope
+			}
+			team.revision++
+			member = &newMember
+			team.audit = append(team.audit, memoryAudit{
+				id:        fmt.Sprintf("audit_%05d", len(team.audit)+1),
+				eventType: "invite_redeemed_pre_approved",
+				actor:     newMember,
+				metadata:  map[string]any{"invite_id": inviteID, "redemption_id": redemptionID},
+				created:   time.Now().UTC(),
+			})
+		} else {
+			team.audit = append(team.audit, memoryAudit{
+				id:        fmt.Sprintf("audit_%05d", len(team.audit)+1),
+				eventType: "invite_redeemed",
+				actor:     domain.Member{PublicIdentity: request.Joiner},
+				metadata:  map[string]any{"invite_id": inviteID, "redemption_id": redemptionID},
+				created:   time.Now().UTC(),
+			})
+		}
+
 		return domain.InvitePINResult{
-			RedemptionID: redemptionID,
-			InviteID:     inviteID,
-			ServerTime:   serverTime,
+			RedemptionID:      redemptionID,
+			InviteID:          inviteID,
+			ServerTime:        serverTime,
+			PreApproved:       preApproved,
+			ScopeKeyEnvelopes: envelopes,
+			Member:            member,
 		}, nil
 	}
 

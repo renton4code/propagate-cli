@@ -39,9 +39,33 @@ Use `--agent-guidance` instead of `--skip-agent-guidance` when the human wants `
 
 ## Request Team Access
 
-**Git-mediated join:** the command adds a pending request to `propagate.yaml` for review in Git.
+There are two join paths:
 
-When **PIN invite codes** exist for the team (planned), interactive `propagate team join` first asks whether to **Request to join** (git-mediated only) or **Join by invite code** (PIN flow). If there are **no** active invite codes, the CLI proceeds with the git-mediated join without that prompt. Non-interactive usage will need explicit join-mode flags once invites ship.
+### Join by invite code (recommended, immediate access)
+
+When a management member has shared a PIN with you, use the invite-code flow for immediate access:
+
+```bash
+propagate team join --init --handle <handle>
+```
+
+The CLI will detect active invite codes and prompt you to choose **Join by invite code**. Enter the PIN shared by your team lead. On success, you have immediate access and can use secrets right away:
+
+```bash
+propagate run --scope dev -- npm run dev
+```
+
+Or pull secrets to a `.env` file if your tooling requires it:
+
+```bash
+propagate env pull --scope dev
+```
+
+Commit the resulting `propagate.yaml` change for audit purposes.
+
+### Git-mediated join (no invite code)
+
+If no invite codes exist, or you choose **Request to join**, the command adds a pending request to `propagate.yaml` for review in Git. You will not have secret access until a management member approves.
 
 Preview the join request:
 

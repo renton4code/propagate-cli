@@ -9,6 +9,7 @@ import (
 	"propagate/backend/internal/domain"
 	"propagate/backend/internal/signing"
 	"propagate/backend/internal/storage"
+	secretcrypto "propagate/shared/secretcrypto"
 )
 
 func (s *Server) handleJoinInvitesList(w http.ResponseWriter, r *http.Request, requestID string, teamID string) {
@@ -51,13 +52,64 @@ func (s *Server) handleInvitePINSubmit(w http.ResponseWriter, r *http.Request, r
 		s.writeError(w, requestID, request.OperationID, apiErr)
 		return
 	}
+
+	var envelopes []domain.ScopeKeyEnvelope
+	if s.config.RelayPrivateKey != nil {
+		bundle, err := s.store.GetInviteScopeKeyBundle(r.Context(), teamID, inviteID)
+		if err != nil && !errors.Is(err, storage.ErrNotFound) && !errors.Is(err, storage.ErrInviteNotActive) {
+			s.writeStorageError(w, requestID, request.OperationID, err)
+			return
+		}
+		if len(bundle) > 0 {
+			envelopes, err = s.reEncryptBundleForJoiner(bundle, request.Joiner)
+			if err != nil {
+				s.writeError(w, requestID, request.OperationID, newAPIError(http.StatusInternalServerError, "relay_error", "scope keys could not be re-encrypted"))
+				return
+			}
+		}
+	}
+
 	serverTime := s.config.Now().UTC().Format(time.RFC3339)
-	result, err := s.store.SubmitInvitePIN(r.Context(), teamID, inviteID, request, serverTime)
+	result, err := s.store.SubmitInvitePIN(r.Context(), teamID, inviteID, request, serverTime, envelopes)
 	if err != nil {
 		s.writeInvitePINError(w, requestID, request.OperationID, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, Envelope{OK: true, RequestID: requestID, OperationID: request.OperationID, Data: result})
+}
+
+func (s *Server) reEncryptBundleForJoiner(bundle []domain.RelayScopeKey, joiner domain.PublicIdentity) ([]domain.ScopeKeyEnvelope, error) {
+	var envelopes []domain.ScopeKeyEnvelope
+	for _, entry := range bundle {
+		scopeKey, err := secretcrypto.DecryptScopeKeyWithPrivate(
+			s.config.RelayPrivateKey,
+			entry.EncryptedScopeKey,
+			entry.Scope,
+			"relay",
+			entry.ScopeKeyVersion,
+		)
+		if err != nil {
+			return nil, err
+		}
+		encrypted, err := secretcrypto.EncryptScopeKey(
+			scopeKey,
+			joiner.EncryptionPublicKey,
+			entry.Scope,
+			joiner.PublicKeySHA,
+			entry.ScopeKeyVersion,
+		)
+		if err != nil {
+			return nil, err
+		}
+		envelopes = append(envelopes, domain.ScopeKeyEnvelope{
+			Scope:             entry.Scope,
+			RecipientKeySHA:   joiner.PublicKeySHA,
+			ScopeKeyVersion:   entry.ScopeKeyVersion,
+			EncryptedScopeKey: encrypted,
+			Algorithm:         secretcrypto.EnvelopeAlgorithm,
+		})
+	}
+	return envelopes, nil
 }
 
 func (s *Server) verifyInvitePINSignature(r *http.Request, body []byte, request domain.InvitePINRequest) error {

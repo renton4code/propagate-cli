@@ -36,6 +36,14 @@ func (s *SQLStore) CreateTeamInvite(ctx context.Context, teamID string, actor do
 		}
 		scopesArg = scopesJSON
 	}
+	var bundleArg interface{}
+	if len(request.ScopeKeyBundle) > 0 {
+		bundleJSON, mErr := json.Marshal(request.ScopeKeyBundle)
+		if mErr != nil {
+			return domain.CreateTeamInviteResult{}, mErr
+		}
+		bundleArg = bundleJSON
+	}
 
 	pin, err := domain.GenerateInvitePIN()
 	if err != nil {
@@ -68,10 +76,11 @@ func (s *SQLStore) CreateTeamInvite(ctx context.Context, teamID string, actor do
 	_, err = s.db.ExecContext(ctx, `
 		insert into team_invites (
 			id, team_id, label, pin_verifier, status, failed_pin_attempts,
-			requested_role, requested_management, requested_scopes, created_by_key_sha
+			requested_role, requested_management, requested_scopes, created_by_key_sha,
+			encrypted_scope_key_bundle, relay_key_version
 		)
-		values ($1, $2, $3, $4, 'active', 0, $5, $6, $7::jsonb, $8)
-	`, inviteID, teamID, strings.TrimSpace(request.Label), string(hash), role, request.RequestedManagement || role == "admins", scopesArg, actor.PublicKeySHA)
+		values ($1, $2, $3, $4, 'active', 0, $5, $6, $7::jsonb, $8, $9::jsonb, $10)
+	`, inviteID, teamID, strings.TrimSpace(request.Label), string(hash), role, request.RequestedManagement || role == "admins", scopesArg, actor.PublicKeySHA, bundleArg, relayKeyVersion(request.ScopeKeyBundle))
 	if err != nil {
 		return domain.CreateTeamInviteResult{}, err
 	}
@@ -120,7 +129,34 @@ func (s *SQLStore) ListJoinerInvites(ctx context.Context, teamID string) (domain
 	return domain.JoinerInvitesData{Invites: out}, rows.Err()
 }
 
-func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string) (domain.InvitePINResult, error) {
+func (s *SQLStore) GetInviteScopeKeyBundle(ctx context.Context, teamID string, inviteID string) ([]domain.RelayScopeKey, error) {
+	var bundleRaw sql.NullString
+	var status string
+	err := s.db.QueryRowContext(ctx, `
+		select status, encrypted_scope_key_bundle
+		from team_invites
+		where team_id = $1 and id = $2
+	`, teamID, inviteID).Scan(&status, &bundleRaw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if status != "active" {
+		return nil, ErrInviteNotActive
+	}
+	if !bundleRaw.Valid || bundleRaw.String == "" {
+		return nil, nil
+	}
+	var bundle []domain.RelayScopeKey
+	if err := json.Unmarshal([]byte(bundleRaw.String), &bundle); err != nil {
+		return nil, err
+	}
+	return bundle, nil
+}
+
+func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string, envelopes []domain.ScopeKeyEnvelope) (domain.InvitePINResult, error) {
 	normPIN, err := domain.NormalizeInvitePIN(request.PIN)
 	if err != nil {
 		return domain.InvitePINResult{}, err
@@ -167,10 +203,13 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 		if err := tx.Commit(); err != nil {
 			return domain.InvitePINResult{}, err
 		}
+		preApproved := len(envelopes) > 0
 		return domain.InvitePINResult{
-			RedemptionID: redemptionID,
-			InviteID:     inviteID,
-			ServerTime:   serverTime,
+			RedemptionID:      redemptionID,
+			InviteID:          inviteID,
+			ServerTime:        serverTime,
+			PreApproved:       preApproved,
+			ScopeKeyEnvelopes: envelopes,
 		}, nil
 	}
 
@@ -259,4 +298,11 @@ func (s *SQLStore) RevokeTeamInvite(ctx context.Context, teamID string, inviteID
 		return ErrInviteNotActive
 	}
 	return nil
+}
+
+func relayKeyVersion(bundle []domain.RelayScopeKey) interface{} {
+	if len(bundle) == 0 {
+		return nil
+	}
+	return bundle[0].RelayKeyVersion
 }

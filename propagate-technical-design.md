@@ -222,6 +222,47 @@ The signed request should include:
 
 The Go Cloud Run API validates the signature, rejects stale timestamps, rejects replayed nonces, loads the member record for the public key SHA, and evaluates permissions before touching team data.
 
+### 7.5 Invite Relay Encryption
+
+PIN invites grant immediate secret access via server-mediated re-encryption. This is the only flow where plaintext scope keys briefly exist in server memory.
+
+**Relay key:**
+
+- A server-side X25519 keypair stored in Google Cloud Secret Manager (never in the database).
+- The relay public key is exposed through a public API endpoint so management CLIs can encrypt scope keys to it at invite creation time.
+- The relay private key is loaded into Cloud Run memory only during invite redemption.
+- Relay keys should be versioned (`relay_key_version`) to support rotation.
+
+**Invite creation (management CLI):**
+
+1. Management CLI fetches the server's current relay public key.
+2. For each scope granted by the invite, CLI decrypts the scope key locally (using the management member's envelope).
+3. CLI encrypts each scope key to the relay public key, producing a relay-encrypted scope key bundle.
+4. CLI uploads the bundle alongside the invite record and PIN verifier.
+
+**Invite redemption (server):**
+
+1. Server validates the PIN against the stored verifier.
+2. Server loads the relay private key from Secret Manager.
+3. Server decrypts each scope key from the relay-encrypted bundle (plaintext exists only in memory, never persisted).
+4. Server re-encrypts each scope key to the joiner's encryption public key (received in the redemption request).
+5. Server stores the resulting scope key envelopes as active envelopes for the new member.
+6. Server creates the active member record with the invite's pre-approved scopes.
+7. Server deletes the relay-encrypted bundle from the invite record (no longer needed).
+8. Server records audit events and returns the envelopes to the joiner's CLI.
+
+**Trust model:**
+
+- For invite flows only, the server briefly holds plaintext scope keys in memory during re-encryption. This is explicitly scoped and documented.
+- Manual `config push` approval retains full end-to-end encryption (scope keys never touch the server).
+- If both the relay private key and the database are compromised simultaneously, unredeemed invite bundles could be decrypted. Mitigations: short invite TTL, relay key in Secret Manager with restricted IAM, bundles deleted after redemption.
+
+**Relay key rotation:**
+
+1. Generate a new relay keypair; store in Secret Manager as the new active version.
+2. Re-encrypt active (unredeemed) invite bundles: decrypt with old relay key, re-encrypt with new relay key, update `relay_key_version`.
+3. Retire the old relay key after all active invites using it are redeemed, revoked, or expired.
+
 ## 8. Cloud API Design
 
 The CLI talks to a small HTTPS API implemented as a Go service deployed on Google Cloud Run. The API should be coarse-grained around product workflows rather than exposing raw database tables.
@@ -473,7 +514,7 @@ Important constraints:
 
 ### 9.10 team_pin_invites
 
-Stores **management-created PIN invites** used to bind a pending Git-mediated join to an expected person. The database must never store plaintext PINs.
+Stores **management-created PIN invites** that grant immediate scope access on successful PIN redemption via server-mediated re-encryption. The database must never store plaintext PINs or plaintext scope keys.
 
 | Column | Purpose |
 | --- | --- |
@@ -481,10 +522,12 @@ Stores **management-created PIN invites** used to bind a pending Git-mediated jo
 | team_id | Parent team |
 | label | Management-entered display name for selection in `propagate team join` |
 | pin_verifier | Slow hash or other verification material for the PIN; never reversible to plaintext |
+| encrypted_scope_key_bundle | Scope keys encrypted to the server relay public key; one entry per granted scope |
+| relay_key_version | Version of the relay key used for encryption (supports relay key rotation) |
 | status | `active`, `redeemed`, `revoked`, `invalidated_pin` (or equivalent terminal states) |
 | failed_pin_attempts | Count of rejected PIN submissions (implementation caps behavior before lockout) |
-| requested_management | Optional management request copied into pending join |
-| requested_scopes | Optional default scope access copied into pending join |
+| requested_management | Optional management request applied on redemption |
+| requested_scopes | Scope access grants applied on redemption |
 | created_by_key_sha | Management member who created the invite |
 | created_at | Creation timestamp |
 | redeemed_at | When PIN was verified successfully |
@@ -495,6 +538,7 @@ Stores **management-created PIN invites** used to bind a pending Git-mediated jo
 Important constraints:
 
 - At most one successful redemption per invite.
+- On successful redemption: the server creates active member records and scope key envelopes atomically, then **nullifies `encrypted_scope_key_bundle`** (the relay-encrypted material is no longer needed and should not persist).
 - **PIN attempt policy**: allow **two** failed PIN checks; the **third** failed submission transitions the invite to a terminal failure state (`invalidated_pin` or equivalent) so it cannot be used again. Implementations should apply this atomically in the stored function that processes PIN attempts.
 - Listing for joiners is **unauthenticated** in the product design: callers supply `team_id` from `propagate.yaml`. Rate limit aggressively and rely on invite TTL; teams must treat repository access as the primary confidentiality boundary for `team_id`. Optional hardening: a future listing token or signed URL model (PRD open questions).
 
@@ -561,10 +605,11 @@ Permission behavior:
 
 The client should also perform local permission checks for early, friendly errors. The server remains authoritative.
 
-**PIN invite routes (planned)** are exceptions to the usual member-only reads:
+**PIN invite routes** are exceptions to the usual member-only reads:
 
 - **Public invite listing** by `team_id` returns only non-secret metadata for `active` invites and must be rate limited at the edge and in application logic.
-- **PIN submission** associates a joiner identity: the request is signed by the joiner's Propagate key, but the actor is **not** yet a team member. The API should validate signatures and reject requests that attempt to read encrypted env material or bypass the two-failed-then-lockout rule.
+- **PIN redemption** grants immediate access: the request is signed by the joiner's Propagate key (not yet a member), and includes the joiner's encryption public key. On successful PIN verification, the server performs re-encryption and atomically creates the active member record with scope key envelopes. After redemption, the joiner is a full member and subsequent requests follow normal authorization.
+- The API must validate signatures and reject requests that attempt to read encrypted env material before successful PIN verification, or bypass the two-failed-then-lockout rule.
 
 ## 11. Supabase Postgres Stored Functions
 
@@ -580,6 +625,7 @@ Stored functions should not expose raw tables directly to the CLI. The Go API sh
 | Actor and permission resolution | Authorization depends on indexed joins across members, scopes, and access rules |
 | Config revision update | Config push needs optimistic concurrency, revision increments, member changes, access rule changes, envelope inserts, and audit events in one transaction |
 | Env pull bundle fetch | The server can return the active envelope, env file mappings, variable metadata, and current encrypted versions with one set-based query |
+| PIN invite redemption | Atomic PIN verification, attempt counter, member creation, scope access rules, scope key envelope inserts, config revision bump, bundle cleanup, and audit events must commit or roll back together |
 | Env push apply | Version checks, immutable version inserts, current pointer updates, tombstones, idempotency, and audit events should commit or roll back together |
 | Audit event append | Audit rows should be written in the same transaction as the operation they describe |
 | Audit summaries | `team status` can efficiently compute last pull per member, members who never pulled, and recent activity near the data |
@@ -616,8 +662,11 @@ Recommended functions:
 | Apply env push | Apply encrypted upserts and tombstones with expected version checks and idempotency |
 | Record pull event | Append pull audit metadata after the CLI successfully receives the encrypted payload |
 | Fetch team status | Return member list, pending/recent access metadata, and audit summaries |
+| Redeem invite | Validate PIN verifier, enforce attempt limits, create active member with scope access rules, insert scope key envelopes (provided by Go API after re-encryption), bump config revision, nullify relay-encrypted bundle, and record audit events atomically |
 
 The Go API should still enforce the public API contract. Stored functions should enforce data invariants and transaction semantics.
+
+Note: the `Redeem invite` function receives already-re-encrypted scope key envelopes from the Go API layer (which performs the relay decryption and re-encryption in memory). The stored function never handles plaintext scope keys.
 
 ### 11.4 Performance And Indexing
 
@@ -759,11 +808,14 @@ Failure handling:
 
 ### 13.1.1 Management PIN Invite
 
-1. A management member runs `propagate team invite` with label and optional default management/scopes.
-2. CLI sends signed `create_invite` request; API generates random PIN, stores verifier only, returns PIN once in the response body.
-3. CLI prints PIN exactly once. Documentation should warn about shell history and screen shoulder-surfing.
-4. The management member communicates PIN out of band.
-5. Management members can list or revoke invites before redemption using `propagate team invite list` or `revoke`.
+1. A management member runs `propagate team invite` with label and scopes to grant.
+2. CLI fetches the server's current relay public key.
+3. CLI decrypts relevant scope keys locally (using the management member's envelopes).
+4. CLI encrypts each scope key to the relay public key, producing a relay-encrypted scope key bundle.
+5. CLI sends signed `create_invite` request with the relay-encrypted bundle; API generates random PIN, stores verifier and bundle, returns PIN once in the response body.
+6. CLI prints PIN exactly once. Documentation should warn about shell history and screen shoulder-surfing.
+7. The management member communicates PIN out of band.
+8. Management members can list or revoke invites before redemption using `propagate team invite list` or `revoke`.
 
 ### 13.2 Developer Join
 
@@ -771,13 +823,26 @@ Failure handling:
 2. For an already configured repository, developer can instead run `propagate team join --init --handle bob@example.com --scope dev=read` to combine existing-project init and the join request.
 3. When `--init` is present, CLI runs the existing-project init path first: create or load identity, verify `propagate.yaml` exists, and offer or apply agent guidance. It must not create a new project config in the join path.
 4. CLI reads `propagate.yaml` for validation and `team_id`.
-5. CLI queries the cloud for **active invite codes** for the team. **If none**, proceed directly to the git-mediated pending join (add pending request, write `propagate.yaml`). **If one or more exist**, the Bubble Tea UI offers **Request to join** (git-mediated pending join only) or **Join by invite code** (PIN subflow: list invites, optional row selection when multiple, signed PIN verification with lockout semantics, then pending join with optional invite metadata).
-6. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested management bit, requested scopes, timestamp, and optional invite correlation fields when the user redeemed an invite code.
-7. CLI writes `propagate.yaml`.
-8. CLI explains that no secret access has been granted.
-9. Developer commits the config diff and opens a pull request.
+5. CLI queries the cloud for **active invite codes** for the team. **If none**, proceed directly to the git-mediated pending join (step 7). **If one or more exist**, the Bubble Tea UI offers **Request to join** (git-mediated only) or **Join by invite code** (invite subflow below).
 
-For **git-mediated** join requests, the cloud does not need to know about the pending row until a management member pushes the approved config. **Invite-code redemption** still produces git-mediated pending entries in `propagate.yaml`; the cloud additionally tracks invite state so duplicate redemptions cannot occur. This keeps access requests reviewable in Git.
+**Invite-code subflow (immediate access):**
+
+6a. CLI lists active invites, joiner selects the matching row (or auto-selects if only one), then enters the PIN.
+6b. CLI sends a signed PIN redemption request including the joiner's encryption public key.
+6c. Server validates PIN, performs relay re-encryption (see §7.5), creates active member and scope key envelopes atomically.
+6d. Server returns the scope key envelopes to the CLI.
+6e. CLI writes the join entry to `propagate.yaml` with `pre_approved: true` and invite correlation fields.
+6f. CLI notifies the developer that access is active and they can immediately run `propagate env pull` or `propagate run`.
+6g. Developer commits the config diff for audit.
+
+**Git-mediated subflow (pending access):**
+
+7. CLI adds a pending join request with handle, signing public key, encryption public key, public key SHA, requested management bit, requested scopes, and timestamp.
+8. CLI writes `propagate.yaml`.
+9. CLI explains that no secret access has been granted.
+10. Developer commits the config diff and opens a pull request for management review.
+
+For **git-mediated** join requests, the cloud does not need to know about the pending row until a management member pushes the approved config. **Invite-code redemption** creates an active member server-side immediately; the `propagate.yaml` entry serves as a Git audit trail. `config push` recognizes pre-approved members and skips re-prompting.
 
 ### 13.3 Management Config Push
 
@@ -1204,6 +1269,8 @@ Go cannot guarantee immediate memory zeroization for all strings. The implementa
 
 In end-to-end encryption mode, Supabase is trusted for availability, metadata storage, authorization checks, and audit history. It is not trusted with sensitive plaintext env values or plaintext scope keys.
 
+**Exception: invite relay re-encryption.** During PIN invite redemption, the Cloud Run API briefly holds plaintext scope keys in memory while re-encrypting them for the new member (see §7.5). This is explicitly scoped to the invite flow only. The scope keys are never persisted in plaintext, never written to logs, and exist in memory only for the duration of the re-encryption operation.
+
 A compromised cloud database could expose:
 
 - Team names.
@@ -1214,12 +1281,20 @@ A compromised cloud database could expose:
 - Variable names.
 - Ciphertexts.
 - Audit metadata.
+- Relay-encrypted scope key bundles for unredeemed invites (requires relay private key to decrypt).
 
 It should not expose:
 
 - Sensitive plaintext env values.
 - User private keys.
-- Plaintext scope keys.
+- Plaintext scope keys (except transiently in Cloud Run memory during invite redemption).
+
+A compromised database **combined with** a compromised relay private key could expose scope keys for unredeemed invites. Mitigations:
+
+- Short invite TTL (recommended 7 days default).
+- Relay private key stored in Secret Manager with restricted IAM (not in the database).
+- Relay-encrypted bundles nullified immediately after successful redemption.
+- Relay key rotation when compromise is suspected.
 
 This threat model should be stated in user-facing security documentation.
 
@@ -1309,10 +1384,12 @@ Guardrails:
 | Agent instruction file has malformed managed block | CLI refuses automatic update and offers a repair or manual instructions |
 | Multiple agent systems detected | CLI lets the user choose targets and reports each created, updated, skipped, or failed target |
 | Non-interactive agent invokes mutating command without approval | CLI fails with a stable exit code and suggests dry-run or explicit human-approved mode |
-| PIN invite: third failed PIN attempt (planned) | Server marks invite invalid; CLI tells joiner to contact a management member for a new invite |
-| PIN invite: redeem after invite expired or revoked (planned) | Server rejects; CLI explains invite is no longer valid |
-| PIN invite: list empty but management member said PIN was issued (planned) | Often means lockout, redemption, expiry, or wrong `team_id`; CLI points to status commands for management members |
-| `team join` with active invites but `--non-interactive` and no join-mode flag (planned) | CLI fails with stable error; user must pick **Request to join** or **Join by invite code** in interactive mode or pass explicit flags |
+| PIN invite: third failed PIN attempt | Server marks invite invalid; CLI tells joiner to contact a management member for a new invite |
+| PIN invite: redeem after invite expired or revoked | Server rejects; CLI explains invite is no longer valid |
+| PIN invite: successful redemption | Server creates active member and envelopes atomically; CLI receives envelopes and notifies developer that access is active |
+| PIN invite: relay key version mismatch | Server detects stale relay key version on bundle; management member must reissue the invite |
+| PIN invite: list empty but management member said PIN was issued | Often means lockout, redemption, expiry, or wrong `team_id`; CLI points to status commands for management members |
+| `team join` with active invites but `--non-interactive` and no join-mode flag | CLI fails with stable error; user must pick **Request to join** or **Join by invite code** in interactive mode or pass explicit flags |
 | Agent guidance write fails | Propagate project setup remains valid; CLI reports the failed target and retry path |
 
 ## 21. Observability And Auditing

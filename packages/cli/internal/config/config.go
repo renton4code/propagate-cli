@@ -735,6 +735,18 @@ func RenderWithPendingJoin(project ParsedProject, request JoinRequest) (string, 
 	return insertPendingJoin(project.Raw, renderJoinRequest(request))
 }
 
+func RenderWithApprovedMember(project ParsedProject, member Member) (string, error) {
+	if project.ActiveMemberSHAs[member.PublicKeySHA] {
+		return "", ErrAlreadyMember
+	}
+	if project.Version != 1 {
+		return "", fmt.Errorf("unsupported config version %d", project.Version)
+	}
+	project.Members = append(project.Members, member)
+	project.ActiveMemberSHAs[member.PublicKeySHA] = true
+	return RenderParsed(project)
+}
+
 func RenderParsed(project ParsedProject) (string, error) {
 	if project.Version != 1 {
 		return "", fmt.Errorf("unsupported config version %d", project.Version)

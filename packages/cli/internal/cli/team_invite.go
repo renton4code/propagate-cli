@@ -13,6 +13,7 @@ import (
 	"propagate/cli/internal/config"
 	"propagate/cli/internal/gitutil"
 	"propagate/cli/internal/identity"
+	"propagate/cli/internal/secretcrypto"
 )
 
 type teamInviteOptions struct {
@@ -155,6 +156,59 @@ func runTeamInviteCreateExec(opts teamInviteOptions, streams Streams) (TeamInvit
 		return TeamInviteCreateResult{}, commandError(ExitValidationError, "api_url_missing", "PROPAGATE_API_URL is required for team invite", nil)
 	}
 
+	client := apiclient.Client{BaseURL: apiURL, HTTPClient: configPushHTTPClient, CLIVersion: Version}
+
+	var bundle []apiclient.RelayScopeKey
+	relayData, relayErr := client.GetRelayPublicKey(context.Background())
+	if relayErr == nil && relayData.RelayPublicKey != "" {
+		scopeNames := make([]string, 0, len(scopes))
+		for name := range scopes {
+			scopeNames = append(scopeNames, name)
+		}
+		if len(scopeNames) == 0 {
+			for _, s := range project.Scopes {
+				scopeNames = append(scopeNames, s.Name)
+			}
+		}
+		for _, scopeName := range scopeNames {
+			envData, envErr := client.KeyEnvelope(context.Background(), ident, project.TeamID, scopeName)
+			if envErr != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Could not fetch scope key for %q: %v", scopeName, envErr))
+				continue
+			}
+			scopeKey, decErr := secretcrypto.DecryptScopeKey(
+				ident.EncryptionPrivateKey,
+				envData.ScopeKeyEnvelope.EncryptedScopeKey,
+				envData.ScopeKeyEnvelope.Algorithm,
+				scopeName,
+				ident.PublicKeySHA,
+				envData.ScopeKeyEnvelope.ScopeKeyVersion,
+			)
+			if decErr != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Could not decrypt scope key for %q: %v", scopeName, decErr))
+				continue
+			}
+			encrypted, encErr := secretcrypto.EncryptScopeKey(
+				scopeKey,
+				relayData.RelayPublicKey,
+				scopeName,
+				"relay",
+				envData.ScopeKeyEnvelope.ScopeKeyVersion,
+			)
+			if encErr != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Could not encrypt scope key for relay: %v", encErr))
+				continue
+			}
+			bundle = append(bundle, apiclient.RelayScopeKey{
+				Scope:             scopeName,
+				EncryptedScopeKey: encrypted,
+				Algorithm:         secretcrypto.EnvelopeAlgorithm,
+				ScopeKeyVersion:   envData.ScopeKeyEnvelope.ScopeKeyVersion,
+				RelayKeyVersion:   relayData.RelayKeyVersion,
+			})
+		}
+	}
+
 	opID, err := operationID("team_invite")
 	if err != nil {
 		return TeamInviteCreateResult{}, err
@@ -164,9 +218,9 @@ func runTeamInviteCreateExec(opts teamInviteOptions, streams Streams) (TeamInvit
 		Label:               label,
 		RequestedManagement: opts.RequestedManagement,
 		RequestedScopes:     scopes,
+		ScopeKeyBundle:      bundle,
 		Client:              apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
 	}
-	client := apiclient.Client{BaseURL: apiURL, HTTPClient: configPushHTTPClient, CLIVersion: Version}
 	created, err := client.CreateTeamInvite(context.Background(), ident, project.TeamID, req)
 	if err != nil {
 		return TeamInviteCreateResult{}, mapAPIError(err, "Team invite could not be created")

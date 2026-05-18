@@ -70,11 +70,15 @@ const terminals: TerminalDef[] = [
       { kind: "output", text: "    Request to join" },
       { kind: "blank" },
       { kind: "output", text: "Invite code (4 digits + letter): ****" },
-      { kind: "output", text: "✓ Invite verified. Join request pre-approved." },
+      { kind: "output", text: "✓ Access granted. Member added to propagate.yaml." },
       { kind: "blank" },
       { kind: "output", text: "Team: Acme API (team_acme_api)" },
       { kind: "output", text: "Scope: dev (read)" },
       { kind: "output", text: "Backend: invite_redeemed" },
+      { kind: "blank" },
+      { kind: "output", text: "Next steps:" },
+      { kind: "output", text: "1. propagate run --scope dev -- <your command>" },
+      { kind: "output", text: "2. Commit the propagate.yaml change for audit purposes." },
     ],
   },
   {
@@ -247,7 +251,7 @@ const features = [
               </li>
               <li class="flex items-start gap-3">
                 <span style="color:#FFE500;font-weight:800;flex-shrink:0">→</span>
-                <span>Join requests arrive as YAML diffs — approve with <code style="font-family:'JetBrains Mono',monospace;color:#FFE500;font-size:0.9em">propagate config push</code></span>
+                <span>Invite codes grant immediate access — or join via Git-reviewed YAML diffs</span>
               </li>
               <li class="flex items-start gap-3">
                 <span style="color:#FFE500;font-weight:800;flex-shrink:0">→</span>

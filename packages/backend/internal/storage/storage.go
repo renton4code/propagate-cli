@@ -36,7 +36,8 @@ type Store interface {
 	TeamStatus(ctx context.Context, teamID string, actor domain.Member) (domain.TeamStatusData, error)
 	CreateTeamInvite(ctx context.Context, teamID string, actor domain.Member, request domain.CreateTeamInviteRequest) (domain.CreateTeamInviteResult, error)
 	ListJoinerInvites(ctx context.Context, teamID string) (domain.JoinerInvitesData, error)
-	SubmitInvitePIN(ctx context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string) (domain.InvitePINResult, error)
+	GetInviteScopeKeyBundle(ctx context.Context, teamID string, inviteID string) ([]domain.RelayScopeKey, error)
+	SubmitInvitePIN(ctx context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string, envelopes []domain.ScopeKeyEnvelope) (domain.InvitePINResult, error)
 	ListAdminInvites(ctx context.Context, teamID string, actor domain.Member) (domain.AdminInvitesData, error)
 	RevokeTeamInvite(ctx context.Context, teamID string, inviteID string, actor domain.Member) error
 }

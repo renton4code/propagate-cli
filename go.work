@@ -3,4 +3,5 @@ go 1.22
 use (
 	./packages/backend
 	./packages/cli
+	./packages/shared
 )
