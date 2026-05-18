@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"propagate/cli/internal/apiclient"
 	"propagate/cli/internal/atomicfile"
 	"propagate/cli/internal/config"
 	"propagate/cli/internal/gitutil"
@@ -67,6 +69,10 @@ func runTeamCommand(args []string, global globalOptions, streams Streams) int {
 		return runTeamJoinCommand(args[1:], global, streams)
 	case "invite":
 		return runTeamInviteCommand(args[1:], global, streams)
+	case "approve":
+		return runTeamApproveCommand(args[1:], global, streams)
+	case "decline":
+		return runTeamDeclineCommand(args[1:], global, streams)
 	case "status":
 		return runTeamStatusCommand(args[1:], global, streams)
 	case "help", "--help", "-h":
@@ -287,46 +293,55 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 		return result, nil
 	}
 
-	request := config.JoinRequest{
-		Handle:              summary.Handle,
-		PublicKeySHA:        summary.PublicKeySHA,
-		SigningPublicKey:    summary.SigningPublicKey,
-		EncryptionPublicKey: summary.EncryptionPublicKey,
-		RequestedManagement: opts.RequestedManagement,
-		RequestedScopes:     requestedScopes,
-		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
-	}
-	if inviteMeta != nil {
-		request.SourceInviteID = inviteMeta.SourceInviteID
-		request.SourceInviteLabel = inviteMeta.SourceInviteLabel
-		request.RedemptionID = inviteMeta.RedemptionID
-	}
-
-	nextConfig, err := config.RenderWithPendingJoin(project, request)
-	if err != nil {
-		switch {
-		case errors.Is(err, config.ErrAlreadyMember):
-			return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "This identity is already an active team member", err, "Run `propagate team status` to inspect current membership.")
-		case errors.Is(err, config.ErrDuplicatePendingJoin):
-			return TeamJoinResult{}, commandError(ExitConflict, "duplicate_pending_join", "This identity already has a pending join request", err, "Commit the existing propagate.yaml diff or ask a Propagate management member to review it.")
-		default:
-			return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "Cannot add pending join request to propagate.yaml", err)
-		}
+	if project.ActiveMemberSHAs[summary.PublicKeySHA] {
+		return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "This identity is already an active team member", nil, "Run `propagate team status` to inspect current membership.")
 	}
 
 	if opts.DryRun {
 		result.Status = "dry_run"
-		result.WouldAddPendingJoin = true
+		result.BackendStatus = "would_submit"
 		result.NextSteps = []string{
-			"Re-run without `--dry-run` to update propagate.yaml.",
-			"After writing the request, commit the config diff and open a pull request.",
+			"Re-run without `--dry-run` to submit the join request to the server.",
 		}
 		return result, nil
 	}
-	if err := config.WriteRaw(configPath, nextConfig); err != nil {
-		return TeamJoinResult{}, commandError(ExitPartialLocalFailure, "partial_local_failure", "Could not write pending join request to propagate.yaml", err)
+
+	apiURL := resolveAPIURL(opts.APIURL, streams.WorkDir)
+	if apiURL == "" {
+		return TeamJoinResult{}, commandError(ExitValidationError, "api_unavailable", "Cannot determine API URL for join request submission", nil, "Set PROPAGATE_API_URL or pass --api-url.")
 	}
+
+	client := apiclient.Client{BaseURL: apiURL, HTTPClient: configPushHTTPClient, CLIVersion: Version}
+	opID, _ := operationID("join_request")
+	submission := apiclient.JoinRequestSubmission{
+		OperationID: opID,
+		Joiner: apiclient.PublicIdentity{
+			Handle:              summary.Handle,
+			PublicKeySHA:        summary.PublicKeySHA,
+			SigningPublicKey:    summary.SigningPublicKey,
+			EncryptionPublicKey: summary.EncryptionPublicKey,
+		},
+		RequestedRole:       joinRequestedRole(opts.RequestedManagement),
+		RequestedManagement: opts.RequestedManagement,
+		RequestedScopes:     requestedScopes,
+		Client:              apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
+	}
+	err = client.SubmitJoinRequest(context.Background(), ident, project.TeamID, submission)
+	if err != nil {
+		var apiErr *apiclient.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "duplicate_join_request" {
+			return TeamJoinResult{}, commandError(ExitConflict, "duplicate_join_request", "This identity already has a pending join request", err, "Ask a management member to run `propagate team approve` or `propagate team decline`.")
+		}
+		return TeamJoinResult{}, commandError(ExitCloudUnavailable, "cloud_error", "Could not submit join request to server", err)
+	}
+
+	result.BackendStatus = "request_submitted"
 	result.PendingJoinAdded = true
+	result.NextSteps = []string{
+		"Join request submitted to the server.",
+		"Ask a management member to run `propagate team approve " + summary.PublicKeySHA + "`.",
+		"Once approved, use `propagate run --scope dev -- <command>` or `propagate env pull --scope dev`.",
+	}
 	return result, nil
 }
 
@@ -382,14 +397,15 @@ func renderTeamJoinResult(w io.Writer, jsonOutput bool, noColor bool, result Tea
 		fmt.Fprintln(w)
 	}
 	if result.DryRun {
-		renderNote(w, style, "Would add join request to propagate.yaml.")
-		renderNote(w, style, "Mode: dry run; no files were written.")
+		renderNote(w, style, "Would submit join request to the server.")
+		renderNote(w, style, "Mode: dry run; no request was sent.")
 	} else if result.PreApproved {
 		renderOK(w, style, "Access granted. Member added to propagate.yaml.")
+	} else if result.BackendStatus == "request_submitted" {
+		renderOK(w, style, "Join request submitted to the server.")
+		renderNote(w, style, "You do not have secret access yet.")
 	} else {
-		renderOK(w, style, "Join request added to propagate.yaml.")
-	}
-	if !result.PreApproved {
+		renderOK(w, style, "Join request submitted.")
 		renderNote(w, style, "You do not have secret access yet.")
 	}
 	fmt.Fprintln(w)
@@ -457,13 +473,24 @@ func sortedScopeNames(scopes map[string]string) []string {
 	return names
 }
 
+func joinRequestedRole(management bool) string {
+	if management {
+		return "admins"
+	}
+	return "developers"
+}
+
 func printTeamHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  propagate team join [flags]")
+	fmt.Fprintln(w, "  propagate team approve <public_key_sha> [flags]")
+	fmt.Fprintln(w, "  propagate team decline <public_key_sha> [flags]")
 	fmt.Fprintln(w, "  propagate team status [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  join      add a Git-reviewed pending join request to propagate.yaml")
+	fmt.Fprintln(w, "  join      request team access (submitted to server)")
+	fmt.Fprintln(w, "  approve   approve a pending join request (management)")
+	fmt.Fprintln(w, "  decline   decline a pending join request (management)")
 	fmt.Fprintln(w, "  invite    create, list, or revoke PIN invites (management)")
 	fmt.Fprintln(w, "  status    show local membership and cloud team activity")
 }

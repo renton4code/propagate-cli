@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"propagate/cli/internal/atomicfile"
 	"propagate/cli/internal/envfile"
@@ -73,26 +72,10 @@ type ParsedProject struct {
 	SyncStatus       string
 	Scopes           []ScopeSummary
 	Members          []Member
-	PendingJoins     []JoinRequest
-	AccessChangesRaw []string
 	ActiveMemberSHAs map[string]bool
-	PendingJoinSHAs  map[string]bool
 	Raw              string
 }
 
-type JoinRequest struct {
-	Handle              string            `json:"handle"`
-	PublicKeySHA        string            `json:"public_key_sha"`
-	SigningPublicKey    string            `json:"signing_public_key"`
-	EncryptionPublicKey string            `json:"encryption_public_key"`
-	RequestedRole       string            `json:"requested_role,omitempty"`
-	RequestedManagement bool              `json:"requested_management,omitempty"`
-	RequestedScopes     map[string]string `json:"requested_scopes"`
-	CreatedAt           string            `json:"created_at"`
-	SourceInviteID      string            `json:"source_invite_id,omitempty"`
-	SourceInviteLabel   string            `json:"source_invite_label,omitempty"`
-	RedemptionID        string            `json:"redemption_id,omitempty"`
-}
 
 type Project struct {
 	Version       int
@@ -106,8 +89,7 @@ type Project struct {
 }
 
 var (
-	ErrAlreadyMember        = errors.New("identity is already an active team member")
-	ErrDuplicatePendingJoin = errors.New("identity already has a pending join request")
+	ErrAlreadyMember = errors.New("identity is already an active team member")
 )
 
 func Path(root string) string {
@@ -263,11 +245,6 @@ func Render(project Project) (string, error) {
 		b.WriteString("      " + scope.Name + ": write\n")
 	}
 	b.WriteString("\n")
-
-	b.WriteString("pending:\n")
-	b.WriteString("  joins: []\n")
-	b.WriteString("  access_changes: []\n")
-
 	return b.String(), nil
 }
 
@@ -305,20 +282,16 @@ func ReadProject(path string) (ParsedProject, error) {
 	raw := string(data)
 	parsed := ParsedProject{
 		ActiveMemberSHAs: map[string]bool{},
-		PendingJoinSHAs:  map[string]bool{},
 		Raw:              raw,
 	}
 
 	lines := splitLines(raw)
 	section := ""
 	currentScope := ""
-	currentList := ""
 	currentMember := -1
-	currentJoin := -1
 	inDefaultAccess := false
 	inEnvFiles := false
 	inVariables := false
-	inRequestedScopes := false
 	inMemberScopes := false
 	scopeIndex := map[string]int{}
 	currentVariable := -1
@@ -333,12 +306,9 @@ func ReadProject(path string) (ParsedProject, error) {
 			inDefaultAccess = false
 			inEnvFiles = false
 			inVariables = false
-			inRequestedScopes = false
 			inMemberScopes = false
 			currentScope = ""
-			currentList = ""
 			currentMember = -1
-			currentJoin = -1
 			currentVariable = -1
 			if strings.HasPrefix(trimmed, "version:") {
 				versionValue, err := parseScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "version:")))
@@ -507,78 +477,7 @@ func ReadProject(path string) (ParsedProject, error) {
 				parsed.Members[currentMember].Scopes[scope] = permission
 			}
 		case "pending":
-			if indent == 2 {
-				currentList = ""
-				currentJoin = -1
-				inRequestedScopes = false
-				_, value, ok := splitKeyValue(trimmed)
-				if strings.HasPrefix(trimmed, "joins:") {
-					currentList = "joins"
-					if ok && value != "" && value != "[]" {
-						return ParsedProject{}, fmt.Errorf("pending.joins must be a list")
-					}
-					continue
-				}
-				if strings.HasPrefix(trimmed, "access_changes:") {
-					currentList = "access_changes"
-					if ok && value != "" && value != "[]" {
-						parsed.AccessChangesRaw = append(parsed.AccessChangesRaw, trimmed)
-					}
-					continue
-				}
-			}
-			switch currentList {
-			case "joins":
-				if indent == 4 && strings.HasPrefix(trimmed, "- ") {
-					content := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
-					parsed.PendingJoins = append(parsed.PendingJoins, JoinRequest{RequestedScopes: map[string]string{}})
-					currentJoin = len(parsed.PendingJoins) - 1
-					inRequestedScopes = false
-					if key, value, ok := splitKeyValue(content); ok {
-						assignJoinField(&parsed.PendingJoins[currentJoin], key, value)
-					}
-					continue
-				}
-				if currentJoin < 0 {
-					continue
-				}
-				if indent == 6 {
-					key, value, ok := splitKeyValue(trimmed)
-					if !ok {
-						continue
-					}
-					if key == "requested_scopes" {
-						inRequestedScopes = true
-						if value == "{}" || value == "" {
-							parsed.PendingJoins[currentJoin].RequestedScopes = map[string]string{}
-						}
-						continue
-					}
-					inRequestedScopes = false
-					assignJoinField(&parsed.PendingJoins[currentJoin], key, value)
-					continue
-				}
-				if inRequestedScopes && indent == 8 {
-					scope, permission, ok := splitKeyValue(trimmed)
-					if !ok {
-						continue
-					}
-					if err := ValidateScopeName(scope); err != nil {
-						return ParsedProject{}, err
-					}
-					if err := ValidatePermission(permission); err != nil {
-						return ParsedProject{}, err
-					}
-					if parsed.PendingJoins[currentJoin].RequestedScopes == nil {
-						parsed.PendingJoins[currentJoin].RequestedScopes = map[string]string{}
-					}
-					parsed.PendingJoins[currentJoin].RequestedScopes[scope] = permission
-				}
-			case "access_changes":
-				if indent >= 4 && trimmed != "[]" {
-					parsed.AccessChangesRaw = append(parsed.AccessChangesRaw, trimmed)
-				}
-			}
+			// Legacy section — ignored.
 		}
 	}
 
@@ -620,14 +519,6 @@ func ReadProject(path string) (ParsedProject, error) {
 		}
 		parsed.ActiveMemberSHAs[member.PublicKeySHA] = true
 	}
-	for idx, join := range parsed.PendingJoins {
-		join = NormalizeJoinRequestAccess(join, parsed.Scopes)
-		parsed.PendingJoins[idx] = join
-		if err := ValidateJoinRequest(join); err != nil {
-			return ParsedProject{}, fmt.Errorf("pending join %d: %w", idx+1, err)
-		}
-		parsed.PendingJoinSHAs[join.PublicKeySHA] = true
-	}
 	return parsed, nil
 }
 
@@ -645,31 +536,6 @@ func assignMemberField(member *Member, key, value string) {
 		member.Role = value
 	case "management":
 		member.Management = parseBool(value)
-	}
-}
-
-func assignJoinField(join *JoinRequest, key, value string) {
-	switch key {
-	case "handle":
-		join.Handle = value
-	case "public_key_sha":
-		join.PublicKeySHA = value
-	case "signing_public_key", "public_key":
-		join.SigningPublicKey = value
-	case "encryption_public_key":
-		join.EncryptionPublicKey = value
-	case "requested_role":
-		join.RequestedRole = value
-	case "requested_management":
-		join.RequestedManagement = parseBool(value)
-	case "created_at":
-		join.CreatedAt = value
-	case "source_invite_id":
-		join.SourceInviteID = value
-	case "source_invite_label":
-		join.SourceInviteLabel = value
-	case "redemption_id":
-		join.RedemptionID = value
 	}
 }
 
@@ -717,22 +583,6 @@ func (p ParsedProject) DefaultRequestedAccess(management bool) map[string]string
 		out[p.Scopes[0].Name] = "read"
 	}
 	return out
-}
-
-func RenderWithPendingJoin(project ParsedProject, request JoinRequest) (string, error) {
-	if err := ValidateJoinRequest(request); err != nil {
-		return "", err
-	}
-	if project.ActiveMemberSHAs[request.PublicKeySHA] {
-		return "", ErrAlreadyMember
-	}
-	if project.PendingJoinSHAs[request.PublicKeySHA] {
-		return "", ErrDuplicatePendingJoin
-	}
-	if project.Version != 1 {
-		return "", fmt.Errorf("unsupported config version %d", project.Version)
-	}
-	return insertPendingJoin(project.Raw, renderJoinRequest(request))
 }
 
 func RenderWithApprovedMember(project ParsedProject, member Member) (string, error) {
@@ -823,22 +673,6 @@ func RenderParsed(project ParsedProject) (string, error) {
 		}
 	}
 	b.WriteString("\n")
-
-	b.WriteString("pending:\n")
-	if len(project.PendingJoins) == 0 {
-		b.WriteString("  joins: []\n")
-	} else {
-		b.WriteString("  joins:\n")
-		for _, join := range project.PendingJoins {
-			if err := ValidateJoinRequest(join); err != nil {
-				return "", err
-			}
-			for _, line := range renderJoinRequest(join) {
-				b.WriteString(line + "\n")
-			}
-		}
-	}
-	b.WriteString("  access_changes: []\n")
 	return b.String(), nil
 }
 
@@ -851,16 +685,11 @@ func SnapshotJSON(project ParsedProject) ([]byte, error) {
 		ID   string `json:"id,omitempty"`
 		Name string `json:"name"`
 	}
-	type snapshotPending struct {
-		Joins         []JoinRequest `json:"joins"`
-		AccessChanges []any         `json:"access_changes"`
-	}
 	type snapshot struct {
 		Version int                      `json:"version"`
 		Team    snapshotTeam             `json:"team"`
 		Scopes  map[string]snapshotScope `json:"scopes"`
 		Members []Member                 `json:"members"`
-		Pending snapshotPending          `json:"pending"`
 	}
 	if project.Version != 1 {
 		return nil, fmt.Errorf("unsupported config version %d", project.Version)
@@ -897,21 +726,11 @@ func SnapshotJSON(project ParsedProject) ([]byte, error) {
 			return nil, fmt.Errorf("member %d: %w", idx+1, err)
 		}
 	}
-	joins := append([]JoinRequest{}, project.PendingJoins...)
-	for idx, join := range joins {
-		join = NormalizeJoinRequestAccess(join, project.Scopes)
-		join.RequestedRole = ""
-		joins[idx] = join
-		if err := ValidateJoinRequest(join); err != nil {
-			return nil, fmt.Errorf("pending join %d: %w", idx+1, err)
-		}
-	}
 	out := snapshot{
 		Version: project.Version,
 		Team:    snapshotTeam{ID: project.TeamID, Name: project.TeamName},
 		Scopes:  scopes,
 		Members: members,
-		Pending: snapshotPending{Joins: joins, AccessChanges: []any{}},
 	}
 	return json.Marshal(out)
 }
@@ -939,27 +758,6 @@ func ValidateMember(member Member) error {
 		if err := ValidatePermission(permission); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func ValidateJoinRequest(request JoinRequest) error {
-	if err := validatePublicIdentity(request.Handle, request.PublicKeySHA, request.SigningPublicKey, request.EncryptionPublicKey); err != nil {
-		return err
-	}
-	if err := ValidateRole(request.RequestedRole); err != nil {
-		return err
-	}
-	for scope, permission := range request.RequestedScopes {
-		if err := ValidateScopeName(scope); err != nil {
-			return err
-		}
-		if err := ValidatePermission(permission); err != nil {
-			return err
-		}
-	}
-	if _, err := time.Parse(time.RFC3339, request.CreatedAt); err != nil {
-		return fmt.Errorf("join request created_at must be RFC3339: %w", err)
 	}
 	return nil
 }
@@ -1045,19 +843,6 @@ func NormalizeMemberAccess(member Member, scopes []ScopeSummary) Member {
 	return member
 }
 
-func NormalizeJoinRequestAccess(request JoinRequest, scopes []ScopeSummary) JoinRequest {
-	if request.RequestedRole == "admins" {
-		request.RequestedManagement = true
-	}
-	if request.RequestedScopes == nil {
-		request.RequestedScopes = map[string]string{}
-	}
-	if len(request.RequestedScopes) == 0 && request.RequestedRole != "" && len(scopes) > 0 {
-		request.RequestedScopes = legacyScopesForRole(request.RequestedRole, scopes)
-	}
-	return request
-}
-
 func MemberCanManage(member Member) bool {
 	return member.Management || member.Role == "admins"
 }
@@ -1128,120 +913,6 @@ func validateScopeName(name string) error {
 	return nil
 }
 
-func renderJoinRequest(request JoinRequest) []string {
-	request = NormalizeJoinRequestAccess(request, nil)
-	lines := []string{
-		"    - handle: " + quote(request.Handle),
-		"      public_key_sha: " + quote(request.PublicKeySHA),
-		"      signing_public_key: " + quote(request.SigningPublicKey),
-		"      encryption_public_key: " + quote(request.EncryptionPublicKey),
-	}
-	if request.RequestedManagement {
-		lines = append(lines, "      requested_management: true")
-	}
-	if len(request.RequestedScopes) == 0 {
-		lines = append(lines, "      requested_scopes: {}")
-	} else {
-		lines = append(lines, "      requested_scopes:")
-		for _, scope := range sortedMapKeys(request.RequestedScopes) {
-			lines = append(lines, "        "+scope+": "+request.RequestedScopes[scope])
-		}
-	}
-	if strings.TrimSpace(request.SourceInviteID) != "" {
-		lines = append(lines, "      source_invite_id: "+quote(request.SourceInviteID))
-	}
-	if strings.TrimSpace(request.SourceInviteLabel) != "" {
-		lines = append(lines, "      source_invite_label: "+quote(request.SourceInviteLabel))
-	}
-	if strings.TrimSpace(request.RedemptionID) != "" {
-		lines = append(lines, "      redemption_id: "+quote(request.RedemptionID))
-	}
-	lines = append(lines, "      created_at: "+quote(request.CreatedAt))
-	return lines
-}
-
-func insertPendingJoin(raw string, joinLines []string) (string, error) {
-	lines := splitLines(raw)
-	if len(lines) == 0 {
-		return "", fmt.Errorf("config is empty")
-	}
-
-	pendingIndex := -1
-	pendingEnd := len(lines)
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(trimLineBreak(line))
-		if leadingSpaces(trimLineBreak(line)) == 0 && trimmed == "pending:" {
-			pendingIndex = i
-			continue
-		}
-		if pendingIndex >= 0 && i > pendingIndex && leadingSpaces(trimLineBreak(line)) == 0 && strings.HasSuffix(trimmed, ":") {
-			pendingEnd = i
-			break
-		}
-	}
-
-	if pendingIndex == -1 {
-		if strings.TrimSpace(raw) != "" && !strings.HasSuffix(raw, "\n") {
-			lines[len(lines)-1] += "\n"
-		}
-		added := []string{"\n", "pending:\n", "  joins:\n"}
-		added = appendLines(added, joinLines)
-		added = append(added, "  access_changes: []\n")
-		lines = append(lines, added...)
-		return strings.Join(lines, ""), nil
-	}
-
-	joinsIndex := -1
-	joinsEnd := pendingEnd
-	for i := pendingIndex + 1; i < pendingEnd; i++ {
-		line := trimLineBreak(lines[i])
-		trimmed := strings.TrimSpace(line)
-		if leadingSpaces(line) == 2 && strings.HasPrefix(trimmed, "joins:") {
-			joinsIndex = i
-			for j := i + 1; j < pendingEnd; j++ {
-				next := trimLineBreak(lines[j])
-				nextTrimmed := strings.TrimSpace(next)
-				if leadingSpaces(next) <= 2 && nextTrimmed != "" && !strings.HasPrefix(nextTrimmed, "#") {
-					joinsEnd = j
-					break
-				}
-			}
-			break
-		}
-	}
-
-	if joinsIndex == -1 {
-		added := []string{"  joins:\n"}
-		added = appendLines(added, joinLines)
-		next := append([]string{}, lines[:pendingIndex+1]...)
-		next = append(next, added...)
-		next = append(next, lines[pendingIndex+1:]...)
-		return strings.Join(next, ""), nil
-	}
-
-	joinsLine := strings.TrimSpace(trimLineBreak(lines[joinsIndex]))
-	if joinsLine == "joins: []" {
-		replacement := []string{"  joins:\n"}
-		replacement = appendLines(replacement, joinLines)
-		next := append([]string{}, lines[:joinsIndex]...)
-		next = append(next, replacement...)
-		next = append(next, lines[joinsIndex+1:]...)
-		return strings.Join(next, ""), nil
-	}
-
-	added := appendLines(nil, joinLines)
-	next := append([]string{}, lines[:joinsEnd]...)
-	next = append(next, added...)
-	next = append(next, lines[joinsEnd:]...)
-	return strings.Join(next, ""), nil
-}
-
-func appendLines(dst []string, lines []string) []string {
-	for _, line := range lines {
-		dst = append(dst, line+"\n")
-	}
-	return dst
-}
 
 func splitLines(raw string) []string {
 	if raw == "" {

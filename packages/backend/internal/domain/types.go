@@ -292,9 +292,54 @@ type TeamStatusData struct {
 	Team                  TeamSummary         `json:"team"`
 	Actor                 Member              `json:"actor"`
 	Members               map[string][]Member `json:"members"`
+	PendingJoinRequests   []JoinRequestRow    `json:"pending_join_requests,omitempty"`
 	PendingOrRecentAccess json.RawMessage     `json:"pending_or_recent_access,omitempty"`
 	LastPulls             []PullActivity      `json:"last_pulls,omitempty"`
 	NeverPulled           []Member            `json:"never_pulled,omitempty"`
+}
+
+type JoinRequestSubmission struct {
+	OperationID         string            `json:"operation_id"`
+	Joiner              PublicIdentity    `json:"joiner"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	Client              ClientMetadata    `json:"client,omitempty"`
+}
+
+type JoinRequestRow struct {
+	Handle              string            `json:"handle"`
+	PublicKeySHA        string            `json:"public_key_sha"`
+	SigningPublicKey    string            `json:"signing_public_key"`
+	EncryptionPublicKey string            `json:"encryption_public_key"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	CreatedAt           string            `json:"created_at"`
+}
+
+type PendingJoinRequestsData struct {
+	Requests []JoinRequestRow `json:"requests"`
+}
+
+type ApproveJoinRequestBody struct {
+	OperationID       string             `json:"operation_id"`
+	ScopeKeyEnvelopes []ScopeKeyEnvelope `json:"scope_key_envelopes"`
+	GrantedRole       string             `json:"granted_role,omitempty"`
+	GrantedManagement bool               `json:"granted_management,omitempty"`
+	GrantedScopes     map[string]string  `json:"granted_scopes,omitempty"`
+	Client            ClientMetadata     `json:"client,omitempty"`
+}
+
+type ApproveJoinResult struct {
+	MemberPublicKeySHA string `json:"member_public_key_sha"`
+	ConfigRevision     string `json:"config_revision"`
+	ConfigHash         string `json:"config_hash"`
+}
+
+type DeclineJoinRequestBody struct {
+	OperationID string         `json:"operation_id"`
+	Client      ClientMetadata `json:"client,omitempty"`
 }
 
 type PullActivity struct {
@@ -482,6 +527,65 @@ func (r PullEventRequest) Validate() error {
 		if err := validateEnvPath(path); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (r JoinRequestSubmission) Validate() error {
+	if strings.TrimSpace(r.OperationID) == "" {
+		return errors.New("operation_id is required")
+	}
+	if err := r.Joiner.Validate(); err != nil {
+		return fmt.Errorf("joiner: %w", err)
+	}
+	if r.RequestedRole != "" {
+		switch r.RequestedRole {
+		case "admins", "developers":
+		default:
+			return fmt.Errorf("unsupported requested_role %q", r.RequestedRole)
+		}
+	}
+	for scope, permission := range r.RequestedScopes {
+		if !scopeNamePattern.MatchString(scope) {
+			return fmt.Errorf("invalid scope name %q", scope)
+		}
+		if !validPermission(permission) {
+			return fmt.Errorf("unsupported permission %q for scope %q", permission, scope)
+		}
+	}
+	return nil
+}
+
+func (r ApproveJoinRequestBody) Validate() error {
+	if strings.TrimSpace(r.OperationID) == "" {
+		return errors.New("operation_id is required")
+	}
+	if r.GrantedRole != "" {
+		switch r.GrantedRole {
+		case "admins", "developers":
+		default:
+			return fmt.Errorf("unsupported granted_role %q", r.GrantedRole)
+		}
+	}
+	for scope, permission := range r.GrantedScopes {
+		if !scopeNamePattern.MatchString(scope) {
+			return fmt.Errorf("invalid scope name %q", scope)
+		}
+		if !validPermission(permission) {
+			return fmt.Errorf("unsupported permission %q for scope %q", permission, scope)
+		}
+	}
+	for _, envelope := range r.ScopeKeyEnvelopes {
+		if err := envelope.ValidateShape(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r DeclineJoinRequestBody) Validate() error {
+	if strings.TrimSpace(r.OperationID) == "" {
+		return errors.New("operation_id is required")
 	}
 	return nil
 }

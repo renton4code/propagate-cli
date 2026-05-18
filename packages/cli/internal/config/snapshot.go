@@ -26,17 +26,11 @@ type snapshotTeam struct {
 	Name string `json:"name"`
 }
 
-type snapshotPending struct {
-	Joins         []JoinRequest     `json:"joins"`
-	AccessChanges []json.RawMessage `json:"access_changes"`
-}
-
 type cloudSnapshot struct {
 	Version int                      `json:"version"`
 	Team    snapshotTeam             `json:"team"`
 	Scopes  map[string]snapshotScope `json:"scopes"`
 	Members []Member                 `json:"members"`
-	Pending snapshotPending          `json:"pending"`
 }
 
 func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, error) {
@@ -62,10 +56,6 @@ func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, er
 	if strings.TrimSpace(snapshot.Team.Name) == "" {
 		return ParsedProject{}, errors.New("team.name is required")
 	}
-	if len(snapshot.Pending.AccessChanges) > 0 {
-		return ParsedProject{}, errors.New("pending.access_changes are not supported by this implementation pass")
-	}
-
 	project := ParsedProject{
 		Version:          snapshot.Version,
 		TeamID:           snapshot.Team.ID,
@@ -73,7 +63,6 @@ func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, er
 		CloudRevision:    cloudRevision,
 		SyncStatus:       "synced",
 		ActiveMemberSHAs: map[string]bool{},
-		PendingJoinSHAs:  map[string]bool{},
 	}
 	if project.CloudRevision == "" {
 		project.CloudRevision = LocalRevision
@@ -128,15 +117,6 @@ func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, er
 		project.ActiveMemberSHAs[member.PublicKeySHA] = true
 	}
 
-	project.PendingJoins = append([]JoinRequest(nil), snapshot.Pending.Joins...)
-	for idx, join := range project.PendingJoins {
-		join = NormalizeJoinRequestAccess(join, project.Scopes)
-		project.PendingJoins[idx] = join
-		if err := ValidateJoinRequest(join); err != nil {
-			return ParsedProject{}, fmt.Errorf("pending join %d: %w", idx+1, err)
-		}
-		project.PendingJoinSHAs[join.PublicKeySHA] = true
-	}
 	return project, nil
 }
 

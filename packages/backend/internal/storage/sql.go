@@ -802,6 +802,15 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 		return domain.TeamStatusData{}, err
 	}
 	actor.Scopes = actorScopes
+
+	var pendingRequests []domain.JoinRequestRow
+	if domain.MemberCanManage(actor) {
+		pendingRequests, err = listPendingJoinRequestsSQL(ctx, s.db, teamID)
+		if err != nil {
+			return domain.TeamStatusData{}, err
+		}
+	}
+
 	return domain.TeamStatusData{
 		Team: domain.TeamSummary{
 			ID:             teamID,
@@ -809,10 +818,11 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 			ConfigRevision: config.ConfigRevision,
 			ConfigHash:     config.ConfigHash,
 		},
-		Actor:       actor,
-		Members:     members,
-		LastPulls:   pulls,
-		NeverPulled: never,
+		Actor:               actor,
+		Members:             members,
+		PendingJoinRequests: pendingRequests,
+		LastPulls:           pulls,
+		NeverPulled:         never,
 	}, nil
 }
 

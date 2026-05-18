@@ -171,12 +171,6 @@ func summarizeLocalConfigStatusChanges(project config.ParsedProject, status apic
 	if project.CloudRevision == config.LocalRevision {
 		changes = append(changes, "local config has not been pushed to the cloud")
 	}
-	if len(project.PendingJoins) > 0 {
-		changes = append(changes, "pending joins: "+strings.Join(configStatusJoinLabels(project.PendingJoins), ", "))
-	}
-	if len(project.AccessChangesRaw) > 0 {
-		changes = append(changes, "pending access changes: "+strconv.Itoa(len(project.AccessChangesRaw)))
-	}
 	switch status.State {
 	case "local_ahead":
 		if len(changes) == 0 {
@@ -206,15 +200,6 @@ func summarizeCloudConfigStatusChanges(project config.ParsedProject, status apic
 		}
 	}
 	return changes
-}
-
-func configStatusJoinLabels(joins []config.JoinRequest) []string {
-	labels := make([]string, 0, len(joins))
-	for _, join := range joins {
-		labels = append(labels, memberLabel(join.Handle, join.PublicKeySHA))
-	}
-	sort.Strings(labels)
-	return labels
 }
 
 func revisionGreater(left, right string) bool {

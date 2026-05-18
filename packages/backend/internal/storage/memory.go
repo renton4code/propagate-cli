@@ -638,6 +638,23 @@ func (s *MemoryStore) TeamStatus(_ context.Context, teamID string, actor domain.
 			neverPulled = append(neverPulled, member)
 		}
 	}
+	var pendingRequests []domain.JoinRequestRow
+	if domain.MemberCanManage(actor) {
+		for _, member := range team.members {
+			if member.Status != "pending" {
+				continue
+			}
+			pendingRequests = append(pendingRequests, domain.JoinRequestRow{
+				Handle:              member.Handle,
+				PublicKeySHA:        member.PublicKeySHA,
+				SigningPublicKey:    member.SigningPublicKey,
+				EncryptionPublicKey: member.EncryptionPublicKey,
+				RequestedRole:       member.Role,
+				RequestedManagement: member.Management,
+			})
+		}
+	}
+
 	return domain.TeamStatusData{
 		Team: domain.TeamSummary{
 			ID:             team.id,
@@ -645,10 +662,11 @@ func (s *MemoryStore) TeamStatus(_ context.Context, teamID string, actor domain.
 			ConfigRevision: domain.RevisionString(team.revision),
 			ConfigHash:     team.configHash,
 		},
-		Actor:       actor,
-		Members:     membersByRole,
-		LastPulls:   lastPulls,
-		NeverPulled: neverPulled,
+		Actor:               actor,
+		Members:             membersByRole,
+		PendingJoinRequests: pendingRequests,
+		LastPulls:           lastPulls,
+		NeverPulled:         neverPulled,
 	}, nil
 }
 
@@ -1111,6 +1129,144 @@ func (s *MemoryStore) RevokeTeamInvite(_ context.Context, teamID string, inviteI
 		return ErrInviteNotActive
 	}
 	inv.status = "revoked"
+	return nil
+}
+
+func (s *MemoryStore) CreateJoinRequest(_ context.Context, teamID string, request domain.JoinRequestSubmission, serverTime string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team := s.teams[teamID]
+	if team == nil {
+		return ErrNotFound
+	}
+	if _, exists := team.members[request.Joiner.PublicKeySHA]; exists {
+		return ErrJoinRequestDuplicate
+	}
+	role := request.RequestedRole
+	if role == "" {
+		role = "developers"
+	}
+	team.members[request.Joiner.PublicKeySHA] = domain.Member{
+		PublicIdentity: request.Joiner,
+		Role:           role,
+		Management:     false,
+		Status:         "pending",
+	}
+	return nil
+}
+
+func (s *MemoryStore) ListPendingJoinRequests(_ context.Context, teamID string, actor domain.Member) (domain.PendingJoinRequestsData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team, err := s.teamForActor(teamID, actor)
+	if err != nil {
+		return domain.PendingJoinRequestsData{}, err
+	}
+	if !domain.MemberCanManage(actor) {
+		return domain.PendingJoinRequestsData{}, ErrPermissionDenied
+	}
+	var requests []domain.JoinRequestRow
+	for _, member := range team.members {
+		if member.Status != "pending" {
+			continue
+		}
+		requests = append(requests, domain.JoinRequestRow{
+			Handle:              member.Handle,
+			PublicKeySHA:        member.PublicKeySHA,
+			SigningPublicKey:    member.SigningPublicKey,
+			EncryptionPublicKey: member.EncryptionPublicKey,
+			RequestedRole:       member.Role,
+			RequestedManagement: member.Management,
+		})
+	}
+	if requests == nil {
+		requests = []domain.JoinRequestRow{}
+	}
+	return domain.PendingJoinRequestsData{Requests: requests}, nil
+}
+
+func (s *MemoryStore) ApproveJoinRequest(_ context.Context, teamID string, publicKeySHA string, actor domain.Member, request domain.ApproveJoinRequestBody) (domain.ApproveJoinResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team, err := s.teamForActor(teamID, actor)
+	if err != nil {
+		return domain.ApproveJoinResult{}, err
+	}
+	if !domain.MemberCanManage(actor) {
+		return domain.ApproveJoinResult{}, ErrPermissionDenied
+	}
+	member, ok := team.members[publicKeySHA]
+	if !ok || member.Status != "pending" {
+		return domain.ApproveJoinResult{}, ErrJoinRequestNotFound
+	}
+
+	role := request.GrantedRole
+	if role == "" {
+		role = "developers"
+	}
+	member.Role = role
+	member.Management = request.GrantedManagement
+	member.Status = "active"
+	member.Scopes = copyStringMap(request.GrantedScopes)
+	team.members[publicKeySHA] = member
+
+	for scopeName, permission := range request.GrantedScopes {
+		scope := team.scopes[scopeName]
+		if scope == nil {
+			continue
+		}
+		scope.memberAccess[publicKeySHA] = permission
+	}
+	for _, envelope := range request.ScopeKeyEnvelopes {
+		scope := team.scopes[envelope.Scope]
+		if scope == nil {
+			continue
+		}
+		scope.envelopes[envelope.RecipientKeySHA] = envelope
+	}
+	team.revision++
+
+	team.audit = append(team.audit, memoryAudit{
+		id:        fmt.Sprintf("audit_%05d", len(team.audit)+1),
+		eventType: "join_request_approved",
+		actor:     actor,
+		metadata:  map[string]any{"approved_member": publicKeySHA},
+		created:   time.Now().UTC(),
+	})
+
+	return domain.ApproveJoinResult{
+		MemberPublicKeySHA: publicKeySHA,
+		ConfigRevision:     domain.RevisionString(team.revision),
+	}, nil
+}
+
+func (s *MemoryStore) DeclineJoinRequest(_ context.Context, teamID string, publicKeySHA string, actor domain.Member, request domain.DeclineJoinRequestBody) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	team, err := s.teamForActor(teamID, actor)
+	if err != nil {
+		return err
+	}
+	if !domain.MemberCanManage(actor) {
+		return ErrPermissionDenied
+	}
+	member, ok := team.members[publicKeySHA]
+	if !ok || member.Status != "pending" {
+		return ErrJoinRequestNotFound
+	}
+	member.Status = "declined"
+	team.members[publicKeySHA] = member
+	team.audit = append(team.audit, memoryAudit{
+		id:        fmt.Sprintf("audit_%05d", len(team.audit)+1),
+		eventType: "join_request_declined",
+		actor:     actor,
+		metadata:  map[string]any{"declined_member": publicKeySHA},
+		created:   time.Now().UTC(),
+	})
 	return nil
 }
 

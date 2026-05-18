@@ -54,8 +54,6 @@ type ConfigPullChangeSummary struct {
 	ScopesAdded         []string `json:"scopes_added,omitempty"`
 	ScopesRemoved       []string `json:"scopes_removed,omitempty"`
 	ScopesChanged       []string `json:"scopes_changed,omitempty"`
-	PendingJoinsAdded   []string `json:"pending_joins_added,omitempty"`
-	PendingJoinsRemoved []string `json:"pending_joins_removed,omitempty"`
 }
 
 func runConfigPullCommand(args []string, global globalOptions, streams Streams) int {
@@ -211,20 +209,18 @@ func hasLocalUnpushedConfig(project config.ParsedProject, localHash string, clou
 	if project.CloudRevision == config.LocalRevision || project.SyncStatus != "synced" {
 		return true
 	}
-	return len(project.PendingJoins) > 0 || len(project.AccessChangesRaw) > 0
+	return false
 }
 
 func summarizeConfigPullChanges(local, pulled config.ParsedProject) ConfigPullChangeSummary {
 	return ConfigPullChangeSummary{
-		TeamNameChanged:     local.TeamName != pulled.TeamName,
-		MembersAdded:        addedMembers(local.Members, pulled.Members),
-		MembersRemoved:      removedMembers(local.Members, pulled.Members),
-		MembersChanged:      changedMembers(local.Members, pulled.Members),
-		ScopesAdded:         addedScopes(local.Scopes, pulled.Scopes),
-		ScopesRemoved:       removedScopes(local.Scopes, pulled.Scopes),
-		ScopesChanged:       changedScopes(local.Scopes, pulled.Scopes),
-		PendingJoinsAdded:   addedJoins(local.PendingJoins, pulled.PendingJoins),
-		PendingJoinsRemoved: removedJoins(local.PendingJoins, pulled.PendingJoins),
+		TeamNameChanged: local.TeamName != pulled.TeamName,
+		MembersAdded:    addedMembers(local.Members, pulled.Members),
+		MembersRemoved:  removedMembers(local.Members, pulled.Members),
+		MembersChanged:  changedMembers(local.Members, pulled.Members),
+		ScopesAdded:     addedScopes(local.Scopes, pulled.Scopes),
+		ScopesRemoved:   removedScopes(local.Scopes, pulled.Scopes),
+		ScopesChanged:   changedScopes(local.Scopes, pulled.Scopes),
 	}
 }
 
@@ -323,38 +319,6 @@ func scopeMap(scopes []config.ScopeSummary) map[string]config.ScopeSummary {
 	return out
 }
 
-func addedJoins(local, pulled []config.JoinRequest) []string {
-	localBySHA := joinMap(local)
-	var out []string
-	for _, join := range pulled {
-		if _, ok := localBySHA[join.PublicKeySHA]; !ok {
-			out = append(out, memberLabel(join.Handle, join.PublicKeySHA))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func removedJoins(local, pulled []config.JoinRequest) []string {
-	pulledBySHA := joinMap(pulled)
-	var out []string
-	for _, join := range local {
-		if _, ok := pulledBySHA[join.PublicKeySHA]; !ok {
-			out = append(out, memberLabel(join.Handle, join.PublicKeySHA))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func joinMap(joins []config.JoinRequest) map[string]config.JoinRequest {
-	out := map[string]config.JoinRequest{}
-	for _, join := range joins {
-		out[join.PublicKeySHA] = join
-	}
-	return out
-}
-
 func renderConfigPullResult(w io.Writer, jsonOutput bool, noColor bool, result ConfigPullResult) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
@@ -418,8 +382,6 @@ func configPullChangeLines(changes ConfigPullChangeSummary) []string {
 	addList("scopes added", changes.ScopesAdded)
 	addList("scopes removed", changes.ScopesRemoved)
 	addList("scopes changed", changes.ScopesChanged)
-	addList("pending joins added", changes.PendingJoinsAdded)
-	addList("pending joins removed", changes.PendingJoinsRemoved)
 	return lines
 }
 

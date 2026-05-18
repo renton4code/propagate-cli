@@ -15,225 +15,8 @@ import (
 	"propagate/cli/internal/apiclient"
 	"propagate/cli/internal/config"
 	"propagate/cli/internal/identity"
-	"propagate/cli/internal/secretcrypto"
 )
 
-func TestConfigPushApprovesPendingJoin(t *testing.T) {
-	repo := initGitRepo(t)
-	adminHome := t.TempDir()
-	t.Setenv("HOME", adminHome)
-
-	var initStdout, initStderr bytes.Buffer
-	code := Run([]string{
-		"init",
-		"--handle", "alice@example.com",
-		"--team-name", "Acme API",
-		"--yes",
-		"--non-interactive",
-		"--skip-agent-guidance",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &initStdout,
-		Err:     &initStderr,
-		WorkDir: repo,
-	})
-	if code != ExitSuccess {
-		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
-	}
-	adminIdent, err := identity.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	setConfigRevision(t, repo, "rev_00001")
-
-	devHome := t.TempDir()
-	t.Setenv("HOME", devHome)
-	var joinStdout, joinStderr bytes.Buffer
-	code = Run([]string{
-		"team", "join",
-		"--handle", "bob@example.com",
-		"--non-interactive",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &joinStdout,
-		Err:     &joinStderr,
-		WorkDir: repo,
-	})
-	if code != ExitSuccess {
-		t.Fatalf("team join exit = %d, stderr:\n%s", code, joinStderr.String())
-	}
-	pendingProject, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pendingProject.PendingJoins) != 1 {
-		t.Fatalf("pending joins = %d, want 1", len(pendingProject.PendingJoins))
-	}
-	pending := pendingProject.PendingJoins[0]
-	scopeKey, err := secretcrypto.GenerateScopeKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	adminEnvelope, err := secretcrypto.EncryptScopeKey(scopeKey, adminIdent.EncryptionPublicKey, "dev", adminIdent.PublicKeySHA, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var sawPush bool
-	var handlerErr error
-	previousClient := configPushHTTPClient
-	t.Cleanup(func() { configPushHTTPClient = previousClient })
-	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.Header.Get(apiclient.HeaderPublicKeySHA) == "" || r.Header.Get(apiclient.HeaderSignature) == "" {
-			handlerErr = fmt.Errorf("request missing signing headers")
-			return nil, handlerErr
-		}
-		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config/status"):
-			if got := r.URL.Query().Get("local_revision"); got != "rev_00001" {
-				handlerErr = fmt.Errorf("local_revision = %q", got)
-				return nil, handlerErr
-			}
-			return testResponse(t, http.StatusOK, map[string]any{
-				"local_revision":     "rev_00001",
-				"cloud_revision":     "rev_00001",
-				"local_config_hash":  r.URL.Query().Get("local_config_hash"),
-				"cloud_config_hash":  "sha256:cloud",
-				"state":              "local_ahead",
-				"recommended_action": "push",
-				"safe_summary":       map[string]any{"members_count": float64(1)},
-			}), nil
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/scopes/dev/key-envelope"):
-			return testResponse(t, http.StatusOK, apiclient.ScopeEnvelopeData{
-				Scope:           apiclient.ScopeRef{Name: "dev"},
-				ConfigRevision:  "rev_00001",
-				ScopeKeyVersion: 1,
-				ScopeKeyEnvelope: apiclient.ScopeKeyEnvelope{
-					Scope:             "dev",
-					RecipientKeySHA:   adminIdent.PublicKeySHA,
-					ScopeKeyVersion:   1,
-					EncryptedScopeKey: adminEnvelope,
-					Algorithm:         secretcrypto.EnvelopeAlgorithm,
-				},
-				Algorithm: secretcrypto.EnvelopeAlgorithm,
-			}), nil
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/config/push"):
-			sawPush = true
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				handlerErr = err
-				return nil, handlerErr
-			}
-			var request struct {
-				OperationID            string          `json:"operation_id"`
-				ExpectedConfigRevision string          `json:"expected_config_revision"`
-				TargetConfigSnapshot   json.RawMessage `json:"target_config_snapshot"`
-				Decisions              struct {
-					Approved []apiclient.ConfigDecision `json:"approved"`
-				} `json:"decisions"`
-				ScopeKeyEnvelopes []apiclient.ScopeKeyEnvelope `json:"scope_key_envelopes"`
-			}
-			if err := json.Unmarshal(body, &request); err != nil {
-				handlerErr = err
-				return nil, handlerErr
-			}
-			if request.OperationID == "" {
-				handlerErr = fmt.Errorf("operation_id was empty")
-				return nil, handlerErr
-			}
-			if request.ExpectedConfigRevision != "rev_00001" {
-				handlerErr = fmt.Errorf("expected revision = %s", request.ExpectedConfigRevision)
-				return nil, handlerErr
-			}
-			if len(request.Decisions.Approved) != 2 || request.Decisions.Approved[0].PublicKeySHA != pending.PublicKeySHA {
-				handlerErr = fmt.Errorf("approved decisions did not include pending join: %+v", request.Decisions.Approved)
-				return nil, handlerErr
-			}
-			accessDecision := request.Decisions.Approved[1]
-			if accessDecision.Type != "scope_access_change" || accessDecision.PublicKeySHA != pending.PublicKeySHA || accessDecision.Scope != "dev" || accessDecision.Permission != "read" {
-				handlerErr = fmt.Errorf("approved decisions did not include scope access grant: %+v", request.Decisions.Approved)
-				return nil, handlerErr
-			}
-			var snapshot struct {
-				Members []config.Member `json:"members"`
-				Pending struct {
-					Joins []config.JoinRequest `json:"joins"`
-				} `json:"pending"`
-			}
-			if err := json.Unmarshal(request.TargetConfigSnapshot, &snapshot); err != nil {
-				handlerErr = err
-				return nil, handlerErr
-			}
-			if len(snapshot.Pending.Joins) != 0 {
-				handlerErr = fmt.Errorf("cloud target snapshot included pending joins: %s", request.TargetConfigSnapshot)
-				return nil, handlerErr
-			}
-			if findMember(snapshot.Members, pending.PublicKeySHA) == nil {
-				handlerErr = fmt.Errorf("cloud target snapshot missing approved member: %s", request.TargetConfigSnapshot)
-				return nil, handlerErr
-			}
-			if len(request.ScopeKeyEnvelopes) != 1 {
-				handlerErr = fmt.Errorf("scope key envelopes = %d, want 1", len(request.ScopeKeyEnvelopes))
-				return nil, handlerErr
-			}
-			envelope := request.ScopeKeyEnvelopes[0]
-			if envelope.Scope != "dev" || envelope.RecipientKeySHA != pending.PublicKeySHA || envelope.EncryptedScopeKey == "" {
-				handlerErr = fmt.Errorf("unexpected approved member envelope: %+v", envelope)
-				return nil, handlerErr
-			}
-			return testResponse(t, http.StatusOK, map[string]any{
-				"old_revision":       "rev_00001",
-				"new_revision":       "rev_00002",
-				"config_hash":        "sha256:accepted",
-				"envelopes_count":    float64(1),
-				"audit_events_count": float64(1),
-			}), nil
-		default:
-			handlerErr = fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			return nil, handlerErr
-		}
-	}), Timeout: 2 * time.Second}
-
-	t.Setenv("HOME", adminHome)
-	var stdout, stderr bytes.Buffer
-	code = Run([]string{
-		"config", "push",
-		"--api-url", "http://propagate.test",
-		"--approve-join", pending.PublicKeySHA,
-		"--yes",
-		"--non-interactive",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &stdout,
-		Err:     &stderr,
-		WorkDir: repo,
-	})
-	if code != ExitSuccess {
-		t.Fatalf("config push exit = %d, stderr:\n%s", code, stderr.String())
-	}
-	if handlerErr != nil {
-		t.Fatal(handlerErr)
-	}
-	if !sawPush {
-		t.Fatalf("fake API did not receive config push")
-	}
-	accepted, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if accepted.CloudRevision != "rev_00002" {
-		t.Fatalf("cloud revision = %s", accepted.CloudRevision)
-	}
-	if len(accepted.PendingJoins) != 0 {
-		t.Fatalf("pending joins remain after approval: %+v", accepted.PendingJoins)
-	}
-	if findMember(accepted.Members, pending.PublicKeySHA) == nil {
-		t.Fatalf("approved join was not promoted to active member:\n%s", readConfig(t, repo))
-	}
-	if !strings.Contains(stdout.String(), "Approved joins: 1") {
-		t.Fatalf("output missing decision summary:\n%s", stdout.String())
-	}
-}
 
 func TestResolveAPIURLReadsBackendDotenv(t *testing.T) {
 	repo := initGitRepo(t)
@@ -321,44 +104,25 @@ func TestConfigPullUpdatesLocalConfigFromCloud(t *testing.T) {
 	if code != ExitSuccess {
 		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
 	}
-	setConfigRevision(t, repo, "rev_00001")
 
-	devHome := t.TempDir()
-	t.Setenv("HOME", devHome)
-	var joinStdout, joinStderr bytes.Buffer
-	code = Run([]string{
-		"team", "join",
-		"--handle", "bob@example.com",
-		"--non-interactive",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &joinStdout,
-		Err:     &joinStderr,
-		WorkDir: repo,
-	})
-	if code != ExitSuccess {
-		t.Fatalf("team join exit = %d, stderr:\n%s", code, joinStderr.String())
-	}
-	localWithPending, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	localProject, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(localWithPending.PendingJoins) != 1 {
-		t.Fatalf("pending joins = %d, want 1", len(localWithPending.PendingJoins))
-	}
-	pending := localWithPending.PendingJoins[0]
 
-	cloudProject := localWithPending
+	bobIdent := generateTestIdentity(t)
+	bobMember := config.Member{
+		Handle:              "bob@example.com",
+		PublicKeySHA:        bobIdent.PublicKeySHA,
+		SigningPublicKey:    bobIdent.SigningPublicKey,
+		EncryptionPublicKey: bobIdent.EncryptionPublicKey,
+		Role:                "developers",
+	}
+
+	cloudProject := localProject
 	cloudProject.CloudRevision = "rev_00002"
 	cloudProject.SyncStatus = "synced"
-	cloudProject.PendingJoins = nil
-	cloudProject.Members = append(cloudProject.Members, config.Member{
-		Handle:              pending.Handle,
-		PublicKeySHA:        pending.PublicKeySHA,
-		SigningPublicKey:    pending.SigningPublicKey,
-		EncryptionPublicKey: pending.EncryptionPublicKey,
-		Role:                pending.RequestedRole,
-	})
+	cloudProject.Members = append(cloudProject.Members, bobMember)
 	cloudSnapshot, err := config.SnapshotJSON(cloudProject)
 	if err != nil {
 		t.Fatal(err)
@@ -429,10 +193,7 @@ func TestConfigPullUpdatesLocalConfigFromCloud(t *testing.T) {
 	if pulled.CloudRevision != "rev_00002" {
 		t.Fatalf("cloud revision = %s", pulled.CloudRevision)
 	}
-	if len(pulled.PendingJoins) != 0 {
-		t.Fatalf("pending joins remain after pull: %+v", pulled.PendingJoins)
-	}
-	if findMember(pulled.Members, pending.PublicKeySHA) == nil {
+	if findMember(pulled.Members, bobMember.PublicKeySHA) == nil {
 		t.Fatalf("cloud member was not pulled into propagate.yaml:\n%s", readConfig(t, repo))
 	}
 	if !strings.Contains(stdout.String(), "Would overwrite local changes: true") {
@@ -464,21 +225,24 @@ func TestConfigStatusReportsLocalAhead(t *testing.T) {
 	}
 	setConfigRevision(t, repo, "rev_00001")
 
-	devHome := t.TempDir()
-	t.Setenv("HOME", devHome)
-	var joinStdout, joinStderr bytes.Buffer
-	code = Run([]string{
-		"team", "join",
-		"--handle", "bob@example.com",
-		"--non-interactive",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &joinStdout,
-		Err:     &joinStderr,
-		WorkDir: repo,
+	localProject, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobIdent := generateTestIdentity(t)
+	localProject.Members = append(localProject.Members, config.Member{
+		Handle:              "bob@example.com",
+		PublicKeySHA:        bobIdent.PublicKeySHA,
+		SigningPublicKey:    bobIdent.SigningPublicKey,
+		EncryptionPublicKey: bobIdent.EncryptionPublicKey,
+		Role:                "developers",
 	})
-	if code != ExitSuccess {
-		t.Fatalf("team join exit = %d, stderr:\n%s", code, joinStderr.String())
+	rendered, err := config.RenderParsed(localProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "propagate.yaml"), []byte(rendered), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	var handlerErr error
@@ -512,7 +276,6 @@ func TestConfigStatusReportsLocalAhead(t *testing.T) {
 		}), nil
 	}), Timeout: 2 * time.Second}
 
-	t.Setenv("HOME", adminHome)
 	var stdout, stderr bytes.Buffer
 	code = Run([]string{
 		"config", "status",
@@ -538,8 +301,8 @@ func TestConfigStatusReportsLocalAhead(t *testing.T) {
 	if result.State != "local_ahead" || result.RecommendedAction != "push" {
 		t.Fatalf("unexpected status result: %+v", result)
 	}
-	if !strings.Contains(strings.Join(result.LocalOnlyChanges, "\n"), "pending joins: bob@example.com") {
-		t.Fatalf("local-only summary missing pending join: %+v", result.LocalOnlyChanges)
+	if len(result.LocalOnlyChanges) == 0 {
+		t.Fatalf("expected local-only changes, got none")
 	}
 	if result.CloudConfigHash != "sha256:cloud" {
 		t.Fatalf("cloud hash = %s", result.CloudConfigHash)
@@ -827,4 +590,13 @@ func testResponse(t *testing.T, status int, data any) *http.Response {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(body.Bytes())),
 	}
+}
+
+func generateTestIdentity(t *testing.T) identity.Identity {
+	t.Helper()
+	ident, err := identity.New("test@example.com", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ident
 }

@@ -66,7 +66,6 @@ func TestInitCreatesMetadataOnlyConfig(t *testing.T) {
 		`- ".env"`,
 		`management: true`,
 		`dev: write`,
-		`pending:`,
 	} {
 		if !strings.Contains(configText, want) {
 			t.Fatalf("propagate.yaml missing %q:\n%s", want, configText)
@@ -158,10 +157,6 @@ func TestInitUploadsEncryptedSetupWhenAPIURLConfigured(t *testing.T) {
 			Team struct {
 				ID string `json:"id"`
 			} `json:"team"`
-			Pending struct {
-				Joins         []any `json:"joins"`
-				AccessChanges []any `json:"access_changes"`
-			} `json:"pending"`
 		}
 		if err := json.Unmarshal(request.ConfigSnapshot, &snapshot); err != nil {
 			handlerErr = err
@@ -173,10 +168,6 @@ func TestInitUploadsEncryptedSetupWhenAPIURLConfigured(t *testing.T) {
 		}
 		if bytes.Contains(request.ConfigSnapshot, []byte(databaseURL)) || bytes.Contains(request.ConfigSnapshot, []byte(publicFlag)) {
 			handlerErr = fmt.Errorf("config snapshot leaked plaintext env value")
-			return nil, handlerErr
-		}
-		if len(snapshot.Pending.Joins) != 0 || len(snapshot.Pending.AccessChanges) != 0 {
-			handlerErr = fmt.Errorf("initial snapshot had pending changes: %s", request.ConfigSnapshot)
 			return nil, handlerErr
 		}
 

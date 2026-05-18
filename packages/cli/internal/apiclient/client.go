@@ -355,9 +355,54 @@ type TeamStatusData struct {
 	Team                  TeamSummary         `json:"team"`
 	Actor                 Member              `json:"actor"`
 	Members               map[string][]Member `json:"members"`
+	PendingJoinRequests   []JoinRequestRow    `json:"pending_join_requests,omitempty"`
 	PendingOrRecentAccess json.RawMessage     `json:"pending_or_recent_access,omitempty"`
 	LastPulls             []PullActivity      `json:"last_pulls,omitempty"`
 	NeverPulled           []Member            `json:"never_pulled,omitempty"`
+}
+
+type JoinRequestRow struct {
+	Handle              string            `json:"handle"`
+	PublicKeySHA        string            `json:"public_key_sha"`
+	SigningPublicKey    string            `json:"signing_public_key"`
+	EncryptionPublicKey string            `json:"encryption_public_key"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	CreatedAt           string            `json:"created_at,omitempty"`
+}
+
+type PendingJoinRequestsData struct {
+	Requests []JoinRequestRow `json:"requests"`
+}
+
+type JoinRequestSubmission struct {
+	OperationID         string            `json:"operation_id"`
+	Joiner              PublicIdentity    `json:"joiner"`
+	RequestedRole       string            `json:"requested_role,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	Client              ClientMetadata    `json:"client,omitempty"`
+}
+
+type ApproveJoinRequestBody struct {
+	OperationID       string             `json:"operation_id"`
+	ScopeKeyEnvelopes []ScopeKeyEnvelope `json:"scope_key_envelopes"`
+	GrantedRole       string             `json:"granted_role,omitempty"`
+	GrantedManagement bool               `json:"granted_management,omitempty"`
+	GrantedScopes     map[string]string  `json:"granted_scopes,omitempty"`
+	Client            ClientMetadata     `json:"client,omitempty"`
+}
+
+type ApproveJoinResult struct {
+	MemberPublicKeySHA string `json:"member_public_key_sha"`
+	ConfigRevision     string `json:"config_revision"`
+	ConfigHash         string `json:"config_hash"`
+}
+
+type DeclineJoinRequestBody struct {
+	OperationID string         `json:"operation_id"`
+	Client      ClientMetadata `json:"client,omitempty"`
 }
 
 type PullActivity struct {
@@ -556,6 +601,46 @@ func (c Client) RevokeTeamInvite(ctx context.Context, ident identity.Identity, t
 	body := []byte("{}")
 	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/invites/" + url.PathEscape(inviteID) + "/revoke"
 	return c.do(ctx, ident, http.MethodPost, endpoint, "", body, "", nil)
+}
+
+func (c Client) SubmitJoinRequest(ctx context.Context, ident identity.Identity, teamID string, request JoinRequestSubmission) error {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/join/requests"
+	return c.do(ctx, ident, http.MethodPost, endpoint, "", body, request.OperationID, nil)
+}
+
+func (c Client) ListPendingJoinRequests(ctx context.Context, ident identity.Identity, teamID string) (PendingJoinRequestsData, error) {
+	var out PendingJoinRequestsData
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/join/requests"
+	if err := c.do(ctx, ident, http.MethodGet, endpoint, "", nil, "", &out); err != nil {
+		return PendingJoinRequestsData{}, err
+	}
+	return out, nil
+}
+
+func (c Client) ApproveJoinRequest(ctx context.Context, ident identity.Identity, teamID string, publicKeySHA string, request ApproveJoinRequestBody) (ApproveJoinResult, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return ApproveJoinResult{}, err
+	}
+	var out ApproveJoinResult
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/join/requests/" + url.PathEscape(publicKeySHA) + "/approve"
+	if err := c.do(ctx, ident, http.MethodPost, endpoint, "", body, request.OperationID, &out); err != nil {
+		return ApproveJoinResult{}, err
+	}
+	return out, nil
+}
+
+func (c Client) DeclineJoinRequest(ctx context.Context, ident identity.Identity, teamID string, publicKeySHA string, request DeclineJoinRequestBody) error {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	endpoint := "/v1/teams/" + url.PathEscape(teamID) + "/join/requests/" + url.PathEscape(publicKeySHA) + "/decline"
+	return c.do(ctx, ident, http.MethodPost, endpoint, "", body, request.OperationID, nil)
 }
 
 func (c Client) GetRelayPublicKey(ctx context.Context) (RelayPublicKeyData, error) {

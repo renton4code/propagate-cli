@@ -2,13 +2,39 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
-func TestTeamJoinAddsPendingRequest(t *testing.T) {
+func TestTeamJoinSubmitsToServer(t *testing.T) {
+	var mu sync.Mutex
+	var received []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/join/requests") && r.Method == http.MethodPost {
+			body := make([]byte, r.ContentLength)
+			r.Body.Read(body)
+			mu.Lock()
+			received = body
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": "req_test", "data": map[string]any{"status": "pending"}})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/join/invites") {
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": "req_test", "data": map[string]any{"invites": []any{}}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
 	repo := initGitRepo(t)
 	adminHome := t.TempDir()
 	t.Setenv("HOME", adminHome)
@@ -31,6 +57,7 @@ func TestTeamJoinAddsPendingRequest(t *testing.T) {
 		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
 	}
 
+	t.Setenv("PROPAGATE_API_URL", srv.URL)
 	devHome := t.TempDir()
 	t.Setenv("HOME", devHome)
 	var stdout, stderr bytes.Buffer
@@ -48,28 +75,43 @@ func TestTeamJoinAddsPendingRequest(t *testing.T) {
 		t.Fatalf("team join exit = %d, stderr:\n%s", code, stderr.String())
 	}
 
-	configText := readConfig(t, repo)
-	for _, want := range []string{
-		`handle: "bob@example.com"`,
-		`public_key_sha: "sha256:`,
-		`signing_public_key: "ssh-ed25519 `,
-		`encryption_public_key: "x25519:`,
-		`requested_scopes:`,
-		`dev: read`,
-	} {
-		if !strings.Contains(configText, want) {
-			t.Fatalf("propagate.yaml missing %q:\n%s", want, configText)
-		}
+	mu.Lock()
+	defer mu.Unlock()
+	if received == nil {
+		t.Fatal("server did not receive join request")
 	}
-	if strings.Contains(configText, "signing_private_key") || strings.Contains(configText, "encryption_private_key") {
-		t.Fatalf("propagate.yaml contains private key material:\n%s", configText)
+	var body map[string]any
+	if err := json.Unmarshal(received, &body); err != nil {
+		t.Fatalf("invalid request body: %s", received)
 	}
-	if !strings.Contains(stdout.String(), "You do not have secret access yet.") {
-		t.Fatalf("join output did not explain pending access:\n%s", stdout.String())
+	joiner, ok := body["joiner"].(map[string]any)
+	if !ok {
+		t.Fatal("request missing joiner field")
+	}
+	if joiner["handle"] != "bob@example.com" {
+		t.Fatalf("joiner handle = %v, want bob@example.com", joiner["handle"])
+	}
+	if !strings.Contains(stdout.String(), "Join request submitted") {
+		t.Fatalf("expected submission output, got:\n%s", stdout.String())
 	}
 }
 
 func TestTeamJoinWithInitRunsExistingProjectInit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/join/requests") && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": "req_test", "data": map[string]any{"status": "pending"}})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/join/invites") {
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": "req_test", "data": map[string]any{"invites": []any{}}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
 	repo := initGitRepo(t)
 	adminHome := t.TempDir()
 	t.Setenv("HOME", adminHome)
@@ -92,6 +134,7 @@ func TestTeamJoinWithInitRunsExistingProjectInit(t *testing.T) {
 		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
 	}
 
+	t.Setenv("PROPAGATE_API_URL", srv.URL)
 	devHome := t.TempDir()
 	t.Setenv("HOME", devHome)
 	var stdout, stderr bytes.Buffer
@@ -112,16 +155,6 @@ func TestTeamJoinWithInitRunsExistingProjectInit(t *testing.T) {
 		t.Fatalf("team join --init exit = %d, stderr:\n%s", code, stderr.String())
 	}
 
-	configText := readConfig(t, repo)
-	for _, want := range []string{
-		`handle: "bob@example.com"`,
-		`requested_scopes:`,
-		`dev: read`,
-	} {
-		if !strings.Contains(configText, want) {
-			t.Fatalf("propagate.yaml missing %q:\n%s", want, configText)
-		}
-	}
 	if _, err := os.Stat(filepath.Join(devHome, ".propagate", "identity")); err != nil {
 		t.Fatalf("team join --init did not create identity: %v", err)
 	}
@@ -136,7 +169,7 @@ func TestTeamJoinWithInitRunsExistingProjectInit(t *testing.T) {
 	for _, want := range []string{
 		"Init completed before join.",
 		"Agent guidance: created.",
-		"Join request added to propagate.yaml.",
+		"Join request submitted",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("team join --init output missing %q:\n%s", want, output)
@@ -210,12 +243,51 @@ func TestTeamRoleFlagIsRemoved(t *testing.T) {
 	}
 }
 
-func TestTeamJoinRejectsDuplicatePendingRequest(t *testing.T) {
-	repo := initRepoAndJoinOnce(t)
+func TestTeamJoinRejectsDuplicateRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/join/requests") && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "request_id": "req_test", "error": map[string]any{"code": "duplicate_join_request", "message": "a join request already exists for this identity"}})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/join/invites") {
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": "req_test", "data": map[string]any{"invites": []any{}}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
 
-	var stdout, stderr bytes.Buffer
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+	repo := initGitRepo(t)
+	adminHome := t.TempDir()
+	t.Setenv("HOME", adminHome)
+
+	var initStdout, initStderr bytes.Buffer
 	code := Run([]string{
+		"init",
+		"--handle", "alice@example.com",
+		"--team-name", "Acme API",
+		"--yes",
+		"--non-interactive",
+		"--skip-agent-guidance",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &initStdout,
+		Err:     &initStderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
+	}
+
+	t.Setenv("PROPAGATE_API_URL", srv.URL)
+	devHome := t.TempDir()
+	t.Setenv("HOME", devHome)
+	var stdout, stderr bytes.Buffer
+	code = Run([]string{
 		"team", "join",
+		"--handle", "bob@example.com",
 		"--non-interactive",
 	}, Streams{
 		In:      strings.NewReader(""),
@@ -319,53 +391,11 @@ func TestTeamJoinDryRunDoesNotWriteFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(devHome, ".propagate", "identity")); !os.IsNotExist(err) {
 		t.Fatalf("dry run wrote identity file, stat error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Would add join request") {
+	if !strings.Contains(stdout.String(), "Would submit join request") {
 		t.Fatalf("expected dry-run output, got:\n%s", stdout.String())
 	}
 }
 
-func initRepoAndJoinOnce(t *testing.T) string {
-	t.Helper()
-	repo := initGitRepo(t)
-	adminHome := t.TempDir()
-	t.Setenv("HOME", adminHome)
-
-	var initStdout, initStderr bytes.Buffer
-	code := Run([]string{
-		"init",
-		"--handle", "alice@example.com",
-		"--team-name", "Acme API",
-		"--yes",
-		"--non-interactive",
-		"--skip-agent-guidance",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &initStdout,
-		Err:     &initStderr,
-		WorkDir: repo,
-	})
-	if code != ExitSuccess {
-		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
-	}
-
-	devHome := t.TempDir()
-	t.Setenv("HOME", devHome)
-	var stdout, stderr bytes.Buffer
-	code = Run([]string{
-		"team", "join",
-		"--handle", "bob@example.com",
-		"--non-interactive",
-	}, Streams{
-		In:      strings.NewReader(""),
-		Out:     &stdout,
-		Err:     &stderr,
-		WorkDir: repo,
-	})
-	if code != ExitSuccess {
-		t.Fatalf("team join exit = %d, stderr:\n%s", code, stderr.String())
-	}
-	return repo
-}
 
 func readConfig(t *testing.T, repo string) string {
 	t.Helper()

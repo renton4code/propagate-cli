@@ -9,16 +9,18 @@ import (
 )
 
 var (
-	ErrReplayRejected      = errors.New("replay rejected")
-	ErrIdempotencyConflict = errors.New("idempotency conflict")
-	ErrNotFound            = errors.New("not found")
-	ErrPermissionDenied    = errors.New("permission denied")
-	ErrRevisionConflict    = errors.New("revision conflict")
-	ErrSecretConflict      = errors.New("secret version conflict")
-	ErrValidation          = errors.New("validation error")
-	ErrInvitePINInvalid    = errors.New("invite pin invalid")
-	ErrInviteLocked        = errors.New("invite locked after failed pin attempts")
-	ErrInviteNotActive     = errors.New("invite is not active")
+	ErrReplayRejected        = errors.New("replay rejected")
+	ErrIdempotencyConflict   = errors.New("idempotency conflict")
+	ErrNotFound              = errors.New("not found")
+	ErrPermissionDenied      = errors.New("permission denied")
+	ErrRevisionConflict      = errors.New("revision conflict")
+	ErrSecretConflict        = errors.New("secret version conflict")
+	ErrValidation            = errors.New("validation error")
+	ErrInvitePINInvalid      = errors.New("invite pin invalid")
+	ErrInviteLocked          = errors.New("invite locked after failed pin attempts")
+	ErrInviteNotActive       = errors.New("invite is not active")
+	ErrJoinRequestNotFound   = errors.New("join request not found")
+	ErrJoinRequestDuplicate  = errors.New("duplicate join request")
 )
 
 type Store interface {
@@ -40,4 +42,8 @@ type Store interface {
 	SubmitInvitePIN(ctx context.Context, teamID string, inviteID string, request domain.InvitePINRequest, serverTime string, envelopes []domain.ScopeKeyEnvelope) (domain.InvitePINResult, error)
 	ListAdminInvites(ctx context.Context, teamID string, actor domain.Member) (domain.AdminInvitesData, error)
 	RevokeTeamInvite(ctx context.Context, teamID string, inviteID string, actor domain.Member) error
+	CreateJoinRequest(ctx context.Context, teamID string, request domain.JoinRequestSubmission, serverTime string) error
+	ListPendingJoinRequests(ctx context.Context, teamID string, actor domain.Member) (domain.PendingJoinRequestsData, error)
+	ApproveJoinRequest(ctx context.Context, teamID string, publicKeySHA string, actor domain.Member, request domain.ApproveJoinRequestBody) (domain.ApproveJoinResult, error)
+	DeclineJoinRequest(ctx context.Context, teamID string, publicKeySHA string, actor domain.Member, request domain.DeclineJoinRequestBody) error
 }

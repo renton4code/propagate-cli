@@ -63,9 +63,9 @@ propagate env pull --scope dev
 
 Commit the resulting `propagate.yaml` change for audit purposes.
 
-### Git-mediated join (no invite code)
+### Request to join (no invite code)
 
-If no invite codes exist, or you choose **Request to join**, the command adds a pending request to `propagate.yaml` for review in Git. You will not have secret access until a management member approves.
+If no invite codes exist, or you choose **Request to join**, the command submits a join request to the server. You will not have secret access until a management member approves.
 
 Preview the join request:
 
@@ -73,35 +73,35 @@ Preview the join request:
 propagate team join --handle <handle> --scope dev=read --dry-run --json --non-interactive
 ```
 
-Write the Git-reviewed request:
+Submit the join request:
 
 ```bash
 propagate team join --handle <handle> --scope dev=read --non-interactive
 ```
 
-Commit the resulting `propagate.yaml` change and ask a management member to review it before `propagate config push`.
+The request is stored server-side. Ask a management member to approve it via `propagate team approve`.
 
 ## Approve Or Decline Pending Joins
 
-Inspect the pending state:
+Inspect pending join requests:
 
 ```bash
 propagate status --json --non-interactive
 ```
 
-Preview decisions:
+Approve a pending join request (management members only):
 
 ```bash
-propagate config push --approve-join <sha> --skip-join <sha> --dry-run --json --non-interactive
+propagate team approve <public_key_sha>
 ```
 
-After human approval, publish:
+Decline a pending join request:
 
 ```bash
-propagate config push --approve-join <sha> --skip-join <sha> --yes --non-interactive
+propagate team decline <public_key_sha>
 ```
 
-Every pending join needs an explicit `--approve-join`, `--decline-join`, or `--skip-join` decision in non-interactive mode.
+After approval, run `propagate config pull` to update local `propagate.yaml` with the new member.
 
 ## Pull Cloud Config
 

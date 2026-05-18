@@ -664,15 +664,7 @@ func cloneParsedProjectForConfigEdit(project config.ParsedProject) config.Parsed
 		copied.Scopes = copyConfigEditStringMap(member.Scopes)
 		out.Members[idx] = copied
 	}
-	out.PendingJoins = make([]config.JoinRequest, len(project.PendingJoins))
-	for idx, join := range project.PendingJoins {
-		copied := join
-		copied.RequestedScopes = copyConfigEditStringMap(join.RequestedScopes)
-		out.PendingJoins[idx] = copied
-	}
-	out.AccessChangesRaw = append([]string(nil), project.AccessChangesRaw...)
 	out.ActiveMemberSHAs = copyConfigEditBoolMap(project.ActiveMemberSHAs)
-	out.PendingJoinSHAs = copyConfigEditBoolMap(project.PendingJoinSHAs)
 	return out
 }
 

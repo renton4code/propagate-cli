@@ -417,6 +417,20 @@ func (s *Server) handleTeamRoutes(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, requestID, "", newAPIError(http.StatusMethodNotAllowed, "usage_error", "method not allowed"))
 	case len(parts) == 4 && parts[1] == "invites" && parts[3] == "revoke":
 		s.handleAdminInviteRevoke(w, r, requestID, teamID, parts[2])
+	case len(parts) == 3 && parts[1] == "join" && parts[2] == "requests":
+		if r.Method == http.MethodGet {
+			s.handleJoinRequestsList(w, r, requestID, teamID)
+			return
+		}
+		if r.Method == http.MethodPost {
+			s.handleJoinRequestCreate(w, r, requestID, teamID)
+			return
+		}
+		s.writeError(w, requestID, "", newAPIError(http.StatusMethodNotAllowed, "usage_error", "method not allowed"))
+	case len(parts) == 5 && parts[1] == "join" && parts[2] == "requests" && parts[4] == "approve":
+		s.handleJoinRequestApprove(w, r, requestID, teamID, parts[3])
+	case len(parts) == 5 && parts[1] == "join" && parts[2] == "requests" && parts[4] == "decline":
+		s.handleJoinRequestDecline(w, r, requestID, teamID, parts[3])
 	default:
 		s.writeError(w, requestID, "", newAPIError(http.StatusNotFound, "usage_error", "unknown endpoint"))
 	}

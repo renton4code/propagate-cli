@@ -38,10 +38,6 @@ type TeamStatusResult struct {
 	CloudConfigHash           string                  `json:"cloud_config_hash,omitempty"`
 	Members                   map[string][]TeamMember `json:"members,omitempty"`
 	MembersCount              int                     `json:"members_count"`
-	PendingJoins              []TeamPendingJoin       `json:"pending_joins,omitempty"`
-	PendingJoinsCount         int                     `json:"pending_joins_count"`
-	PendingAccessChanges      []string                `json:"pending_access_changes,omitempty"`
-	PendingAccessChangesCount int                     `json:"pending_access_changes_count"`
 	PendingOrRecentAccess     json.RawMessage         `json:"pending_or_recent_access,omitempty"`
 	LastPulls                 []TeamPullActivity      `json:"last_pulls,omitempty"`
 	NeverPulled               []TeamMember            `json:"never_pulled,omitempty"`
@@ -63,15 +59,6 @@ type TeamMember struct {
 	Management   bool              `json:"management,omitempty"`
 	Scopes       map[string]string `json:"scopes,omitempty"`
 	Status       string            `json:"status,omitempty"`
-}
-
-type TeamPendingJoin struct {
-	Handle              string            `json:"handle,omitempty"`
-	PublicKeySHA        string            `json:"public_key_sha"`
-	RequestedRole       string            `json:"requested_role,omitempty"`
-	RequestedManagement bool              `json:"requested_management,omitempty"`
-	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
-	CreatedAt           string            `json:"created_at,omitempty"`
 }
 
 type TeamPullActivity struct {
@@ -146,11 +133,6 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	result.LocalRevision = project.CloudRevision
 	result.Members = teamMembersFromLocal(project.Members)
 	result.MembersCount = countTeamMembers(result.Members)
-	result.PendingJoins = pendingJoinsFromLocal(project.PendingJoins)
-	result.PendingJoinsCount = len(result.PendingJoins)
-	result.PendingAccessChanges = append([]string(nil), project.AccessChangesRaw...)
-	sort.Strings(result.PendingAccessChanges)
-	result.PendingAccessChangesCount = len(result.PendingAccessChanges)
 
 	localHash, err := config.ConfigHash(project)
 	if err != nil {
@@ -308,28 +290,6 @@ func teamMemberListFromCloud(members []apiclient.Member) []TeamMember {
 	return out
 }
 
-func pendingJoinsFromLocal(joins []config.JoinRequest) []TeamPendingJoin {
-	out := make([]TeamPendingJoin, 0, len(joins))
-	for _, join := range joins {
-		scopes := map[string]string{}
-		for scope, permission := range join.RequestedScopes {
-			scopes[scope] = permission
-		}
-		out = append(out, TeamPendingJoin{
-			Handle:              join.Handle,
-			PublicKeySHA:        join.PublicKeySHA,
-			RequestedRole:       join.RequestedRole,
-			RequestedManagement: join.RequestedManagement,
-			RequestedScopes:     scopes,
-			CreatedAt:           join.CreatedAt,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return memberLabel(out[i].Handle, out[i].PublicKeySHA) < memberLabel(out[j].Handle, out[j].PublicKeySHA)
-	})
-	return out
-}
-
 func teamPullsFromCloud(pulls []apiclient.PullActivity) []TeamPullActivity {
 	out := make([]TeamPullActivity, 0, len(pulls))
 	for _, pull := range pulls {
@@ -409,11 +369,6 @@ func teamStatusLocalNextSteps(project config.ParsedProject, summary identity.Sum
 	var steps []string
 	switch {
 	case project.ActiveMemberSHAs[summary.PublicKeySHA]:
-		if cloudStep != "" {
-			steps = append(steps, cloudStep)
-		}
-	case project.PendingJoinSHAs[summary.PublicKeySHA]:
-		steps = append(steps, "Commit the pending join request and ask a Propagate management member to run `propagate config push` after review.")
 		if cloudStep != "" {
 			steps = append(steps, cloudStep)
 		}
@@ -502,8 +457,6 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, noColor bool, result T
 	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 
 	renderTeamMembers(w, style, result.Members)
-	renderPendingJoins(w, style, result.PendingJoins)
-	renderTeamStatusList(w, style, "Pending access changes", result.PendingAccessChanges)
 	if len(result.PendingOrRecentAccess) > 0 {
 		fmt.Fprintf(w, "\n%s\n", style.bold("Cloud pending/recent access:"))
 		fmt.Fprintf(w, "- %s\n", string(result.PendingOrRecentAccess))
@@ -529,28 +482,6 @@ func renderTeamMembers(w io.Writer, style outputStyle, members map[string][]Team
 			}
 			fmt.Fprintf(w, "    - %s%s\n", memberLabel(member.Handle, member.PublicKeySHA), status)
 		}
-	}
-}
-
-func renderPendingJoins(w io.Writer, style outputStyle, joins []TeamPendingJoin) {
-	if len(joins) == 0 {
-		return
-	}
-	fmt.Fprintf(w, "\n%s\n", style.bold("Pending join requests:"))
-	for _, join := range joins {
-		line := memberLabel(join.Handle, join.PublicKeySHA)
-		if join.RequestedManagement {
-			line += " -> management"
-		} else if join.RequestedRole != "" {
-			line += " -> " + teamAccessGroup(join.RequestedRole, false)
-		}
-		if len(join.RequestedScopes) > 0 {
-			line += " scopes " + strings.Join(formatScopePermissions(join.RequestedScopes), ", ")
-		}
-		if join.CreatedAt != "" {
-			line += " created " + join.CreatedAt
-		}
-		fmt.Fprintf(w, "- %s\n", line)
 	}
 }
 

@@ -1,2 +1,1 @@
-- Git mediated joins: remove it from config, make pedning requests gitless, so you only request access, admin will see it in cloud, and can approve/reject the invite.
 - Every propagate run pulls cloud config before starting the child process. Developers running propagate run -- npm run dev repeatedly will hit latency on every restart. Add a --no-sync flag.
