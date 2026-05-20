@@ -31,7 +31,7 @@ Root aliases are supported for help and version output: `propagate --help`, `pro
 | `propagate config push` | Push approved config decisions to the cloud. | Cloud config, local `propagate.yaml` revision. | Run `--dry-run` first. Use `--approve-join`, `--decline-join`, or `--skip-join` for every pending join, then `--yes --non-interactive` after approval. |
 | `propagate config edit` | Interactive editor for safe variable declaration metadata. | Local `propagate.yaml`. | Not automatable today; `--non-interactive` intentionally fails. |
 | `propagate env pull` | Decrypt cloud values locally and merge configured env files. | Local env files, pull audit event. | Run `--dry-run` first. Use `--yes --non-interactive` only after approving file creation, overwrites, or prod writes. |
-| `propagate run` | Pull latest config, decrypt cloud values locally, and inject them into a child process. | Local `propagate.yaml` when cloud config changed, child process environment, pull audit event. | Use `propagate run --scope dev -- COMMAND [args...]`. Duplicate variable names across files are rejected; child output is not sanitized. |
+| `propagate run` | Refresh config by default, decrypt cloud values locally, and inject them into a child process. | Local `propagate.yaml` when cloud config changed unless `--no-sync` is set, child process environment, pull audit event. | Use `propagate run --scope dev -- COMMAND [args...]`. Add `--no-sync` for repeated restarts after reviewing local config freshness. Duplicate variable names across files are rejected; child output is not sanitized. |
 | `propagate env push` | Encrypt local env file changes and upload them. | Cloud env state, local `propagate.yaml` revision. | Run `--dry-run` first. Use `--yes --non-interactive` only after approving additions, changes, and removals. |
 | `propagate env set NAME` | Set one encrypted cloud variable without editing local env files. Prompts for scope when `--scope` is omitted and multiple scopes exist. | Cloud env state, local `propagate.yaml` revision. | Never pass the value as an argument. For automation, pipe one approved single-line value with `--scope NAME --value-stdin --yes --non-interactive`. |
 | `propagate env status` | Show encrypted cloud env metadata for a scope and local state. | None. | `--json --non-interactive`; JSON excludes masked values. |
@@ -46,9 +46,11 @@ Root aliases are supported for help and version output: `propagate --help`, `pro
 
 `--value-stdin` is only for `propagate env set`. It reads exactly one single-line value from stdin and keeps positional env values rejected.
 
+`--no-sync` is only for `propagate run`. It skips the pre-run cloud config refresh and leaves `propagate.yaml` unchanged, while still fetching the encrypted pull bundle needed to inject current scope values.
+
 `propagate env set` uses the only configured scope automatically. When multiple scopes exist, humans get a scope picker and non-interactive runs must pass `--scope`.
 
-`propagate run` has no dry-run mode because it does not write env files or cloud values. It refreshes `propagate.yaml` from the cloud before starting the child process, and requires confirmation or `--yes` before overwriting local config changes. Use `--yes` for approved prod injection, and remember that child process output is not sanitized by Propagate.
+`propagate run` has no dry-run mode because it does not write env files or cloud values. It refreshes `propagate.yaml` from the cloud before starting the child process unless `--no-sync` is set, and requires confirmation or `--yes` before overwriting local config changes. Use `--yes` for approved prod injection, and remember that child process output is not sanitized by Propagate.
 
 ## Agent Rules
 

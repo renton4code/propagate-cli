@@ -956,7 +956,7 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 
 1. User runs `propagate run --scope dev -- COMMAND [args...]`.
 2. CLI loads identity and config.
-3. CLI pulls the latest cloud config and updates `propagate.yaml`; if local config changes would be overwritten, the CLI requires confirmation or `--yes`.
+3. CLI pulls the latest cloud config and updates `propagate.yaml` unless `--no-sync` is set; if local config changes would be overwritten, the CLI requires confirmation or `--yes`.
 4. CLI sends the same signed read request used by env pull.
 5. Server verifies read access and returns encrypted secret versions plus the member's active scope key envelope.
 6. CLI decrypts the scope key locally.
@@ -968,6 +968,8 @@ For `prod`, the CLI should require an additional confirmation before writing to 
 12. CLI exits with the child process exit code.
 
 `propagate run` must not write local env files or print decrypted values in Propagate-owned output. It also cannot guarantee child output safety: once values are injected, the child process can read, log, print, or pass them to descendants.
+
+`--no-sync` is intended for repeated local restarts after the developer has reviewed config freshness. It skips only the config snapshot fetch/write; the CLI still fetches the encrypted pull bundle and records the process-injection audit event.
 
 For `prod`, the CLI should require confirmation before process injection. Non-interactive prod injection requires `--yes`.
 
@@ -1524,7 +1526,7 @@ Operational recommendations:
 - `propagate config push`.
 - `propagate config edit`.
 - `propagate env pull`.
-- `propagate run`.
+- `propagate run`, including `--no-sync` for repeated local restarts.
 - `propagate env push`.
 - `propagate env set`.
 - `propagate env status`.

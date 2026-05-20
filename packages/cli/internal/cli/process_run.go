@@ -20,8 +20,9 @@ import (
 
 type processRunOptions struct {
 	globalOptions
-	Scope string
-	Yes   bool
+	Scope  string
+	Yes    bool
+	NoSync bool
 }
 
 type decryptedProcessEnv struct {
@@ -42,6 +43,7 @@ func runProcessCommand(args []string, global globalOptions, streams Streams) int
 	addGlobalFlags(fs, &opts.globalOptions)
 	fs.StringVar(&opts.Scope, "scope", "dev", "scope to inject")
 	fs.BoolVar(&opts.Yes, "yes", false, "confirm prod process injection")
+	fs.BoolVar(&opts.NoSync, "no-sync", false, "skip cloud config refresh before injection")
 
 	separator := commandSeparatorIndex(args)
 	flagArgs := args
@@ -137,9 +139,11 @@ func prepareProcessEnv(opts processRunOptions, streams Streams, reader *bufio.Re
 	}
 	client := apiclient.Client{BaseURL: apiURL, HTTPClient: configPushHTTPClient, CLIVersion: Version}
 	ctx := context.Background()
-	project, err = pullConfigBeforeProcessRun(ctx, client, ident, configPath, project, opts, reader, streams.In, streams.Out)
-	if err != nil {
-		return decryptedProcessEnv{}, err
+	if !opts.NoSync {
+		project, err = pullConfigBeforeProcessRun(ctx, client, ident, configPath, project, opts, reader, streams.In, streams.Out)
+		if err != nil {
+			return decryptedProcessEnv{}, err
+		}
 	}
 	localScope := findScopeSummary(project.Scopes, scopeName)
 
@@ -347,6 +351,7 @@ func printProcessRunHelp(w io.Writer) {
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  --scope VALUE       scope to inject (default dev)")
 	fmt.Fprintln(w, "  --yes               confirm prod process injection and config overwrite")
+	fmt.Fprintln(w, "  --no-sync           skip cloud config refresh before injection")
 	fmt.Fprintln(w, "  --api-url VALUE     override Propagate API URL")
 	fmt.Fprintln(w, "  --json              render machine-readable errors")
 	fmt.Fprintln(w, "  --non-interactive   fail instead of prompting")

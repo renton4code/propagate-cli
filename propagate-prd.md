@@ -580,16 +580,17 @@ Injects decrypted cloud env values into a child process without writing local en
 
 ```bash
 propagate run --scope dev -- npm run dev
+propagate run --scope dev --no-sync -- npm run dev
 propagate run --scope staging -- go test ./...
 propagate run --scope prod --yes -- ./bin/maintenance-task
 ```
 
-Default scope is `dev`. The `--` separator is required so Propagate flags are clearly separated from child command flags.
+Default scope is `dev`. The `--` separator is required so Propagate flags are clearly separated from child command flags. By default, `propagate run` refreshes cloud config before injection; `--no-sync` skips that config refresh for repeated local restarts while still fetching the encrypted pull bundle for current values.
 
 #### Behavior
 
 1. Read `propagate.yaml`.
-2. Pull the latest cloud config and update `propagate.yaml`; require confirmation or `--yes` before overwriting local config changes.
+2. Pull the latest cloud config and update `propagate.yaml` unless `--no-sync` is set; require confirmation or `--yes` before overwriting local config changes.
 3. Determine env file mappings and variable metadata for the selected scope.
 4. Check whether the user has read access to the scope.
 5. Fetch the encrypted pull bundle from the cloud.
@@ -604,6 +605,7 @@ Default scope is `dev`. The `--` separator is required so Propagate flags are cl
 #### Safety Requirements
 
 - Must not write local env files.
+- With `--no-sync`, must not refresh or write `propagate.yaml`.
 - Must not print plaintext values in Propagate-owned output, JSON, warnings, or errors.
 - Must not sanitize or suppress child process output; the child process can print values if the command does so.
 - Must fail before starting the child process on duplicate variable names across env file mappings.
@@ -1201,7 +1203,7 @@ MVP success metrics:
 - `propagate config status`.
 - `propagate config edit`.
 - `propagate env pull`.
-- `propagate run -- command`.
+- `propagate run -- command`, including `--no-sync` for repeated local restarts.
 - `propagate env push`.
 - `propagate env set`.
 - `propagate env status`.

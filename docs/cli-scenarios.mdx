@@ -157,7 +157,15 @@ The preferred way to use secrets locally. No `.env` files written to disk — se
 propagate run --scope dev -- npm run dev
 ```
 
-`propagate run` refreshes `propagate.yaml` from the cloud, decrypts values locally, and passes them only to the child process environment. It does not write `.env` files, and injected cloud values override inherited environment variables with the same names for that child process.
+`propagate run` refreshes `propagate.yaml` from the cloud by default, decrypts values locally, and passes them only to the child process environment. It does not write `.env` files, and injected cloud values override inherited environment variables with the same names for that child process.
+
+For repeated local restarts after you have reviewed config freshness, skip the pre-run config refresh:
+
+```bash
+propagate run --scope dev --no-sync -- npm run dev
+```
+
+`--no-sync` leaves `propagate.yaml` untouched while still fetching the encrypted pull bundle needed to inject current values.
 
 Do not use `propagate run` to inspect or print secrets. Child process output is not sanitized by Propagate, so avoid commands such as `env`, `printenv`, or debugging tools that dump environment variables.
 

@@ -294,6 +294,127 @@ func TestProcessRunPullsConfigBeforeBundleWhenScopeMissingLocally(t *testing.T) 
 	}
 }
 
+func TestProcessRunNoSyncSkipsConfigRefresh(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var initStdout, initStderr bytes.Buffer
+	code := Run([]string{
+		"init",
+		"--handle", "alice@example.com",
+		"--team-name", "Acme API",
+		"--yes",
+		"--non-interactive",
+		"--skip-agent-guidance",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &initStdout,
+		Err:     &initStderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
+	}
+	setConfigRevision(t, repo, "rev_00001")
+
+	ident, err := identity.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := encryptedPullBundle(t, ident, project.TeamID, map[string]string{"API_TOKEN": "cloud-token"})
+	bundle.ConfigRevision = "rev_00002"
+
+	var sawConfig bool
+	var sawBundle bool
+	var sawEvent bool
+	var handlerErr error
+	previousClient := configPushHTTPClient
+	t.Cleanup(func() { configPushHTTPClient = previousClient })
+	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			sawConfig = true
+			handlerErr = fmt.Errorf("config refresh should be skipped when --no-sync is set")
+			return nil, handlerErr
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/scopes/dev/pull-bundle"):
+			sawBundle = true
+			return testResponse(t, http.StatusOK, bundle), nil
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/events/pull"):
+			sawEvent = true
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			var request apiclient.PullEventRequest
+			if err := json.Unmarshal(body, &request); err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			if request.Scope != "dev" || request.ConfigRevision != "rev_00002" || request.Client.ClientKind != "cli_run" {
+				handlerErr = fmt.Errorf("unexpected process injection event: %+v", request)
+				return nil, handlerErr
+			}
+			return testResponse(t, http.StatusOK, map[string]any{"event_id": "audit_00001", "recorded_count": float64(1)}), nil
+		default:
+			handlerErr = fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, handlerErr
+		}
+	}), Timeout: 2 * time.Second}
+
+	t.Setenv("PROPAGATE_TEST_PROCESS_RUN_HELPER", "1")
+	t.Setenv("PROPAGATE_TEST_EXPECT_API_TOKEN", "cloud-token")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code = Run([]string{
+		"run",
+		"--api-url", "http://propagate.test",
+		"--scope", "dev",
+		"--no-sync",
+		"--",
+		exe, "-test.run=TestProcessRunChildHelper",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("process run exit = %d, stdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if handlerErr != nil {
+		t.Fatal(handlerErr)
+	}
+	if sawConfig {
+		t.Fatalf("fake API received config refresh despite --no-sync")
+	}
+	if !sawBundle {
+		t.Fatalf("fake API did not receive pull bundle request")
+	}
+	if !sawEvent {
+		t.Fatalf("fake API did not receive process injection event")
+	}
+	unchanged, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.CloudRevision != "rev_00001" {
+		t.Fatalf("process run --no-sync changed local config revision to %s", unchanged.CloudRevision)
+	}
+	if strings.TrimSpace(stdout.String()) != "child-ok" {
+		t.Fatalf("child stdout = %q", stdout.String())
+	}
+}
+
 func TestProcessRunReturnsChildExitCode(t *testing.T) {
 	repo := initGitRepo(t)
 	home := t.TempDir()

@@ -602,12 +602,14 @@ Usage:
 | Command Shape | Behavior |
 | --- | --- |
 | `propagate run --scope dev -- npm run dev` | Runs `npm run dev` with decrypted `dev` values in the child environment |
+| `propagate run --scope dev --no-sync -- npm run dev` | Skips the pre-run config refresh and injects current `dev` values using the pull bundle |
 
 Inputs:
 
 | Input | Required | Notes |
 | --- | --- | --- |
 | `--scope` | Optional | Defaults to `dev` |
+| `--no-sync` | Optional | Skip pulling cloud config before process injection; `propagate.yaml` is left unchanged |
 | `--` | Required | Separates Propagate flags from child command and child flags |
 | Child command | Required | Executed directly, not through a shell unless the user explicitly runs one |
 | `--yes` | Optional | Required for non-interactive `prod` injection |
@@ -619,17 +621,18 @@ Local reads:
 
 API calls:
 
-- `GET /v1/teams/{team_id}/config`
+- `GET /v1/teams/{team_id}/config` unless `--no-sync` is set
 - `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle`
 - `POST /v1/teams/{team_id}/events/pull` with client kind `cli_run`
 
 Local writes:
 
-- `propagate.yaml` when the cloud config differs. If local config changes would be overwritten, require confirmation or `--yes`.
+- `propagate.yaml` when the cloud config differs and `--no-sync` is not set. If local config changes would be overwritten, require confirmation or `--yes`.
 
 Execution behavior:
 
-- Pull and validate the latest cloud config before selecting scope metadata.
+- Pull and validate the latest cloud config before selecting scope metadata by default.
+- If `--no-sync` is set, skip the cloud config fetch/write step and use the local `propagate.yaml` metadata; still fetch the encrypted pull bundle for current values.
 - Decrypt values locally using the same pull-bundle path as `env pull`.
 - Append decrypted `NAME=value` entries after the inherited environment so cloud values override existing variables for the child process.
 - Preserve stdin, stdout, stderr, and working directory.
@@ -900,7 +903,7 @@ Common error payload:
 | `GET /v1/version` | All commands | API compatibility and server version |
 | `POST /v1/teams/setup` | `init` | Create team, first management member, scopes, encrypted initial values, envelopes |
 | `GET /v1/teams/{team_id}/config/status` | `config status`, `config push` | Return revision/hash comparison metadata |
-| `GET /v1/teams/{team_id}/config` | `config pull` | Return current normalized config snapshot |
+| `GET /v1/teams/{team_id}/config` | `config pull`, `run` unless `--no-sync` | Return current normalized config snapshot |
 | `POST /v1/teams/{team_id}/config/push` | `config push` | Apply management-approved config decisions and envelopes |
 | `GET /v1/teams/{team_id}/scopes/{scope}/key-envelope` | `config push` | Return the actor's active encrypted scope key envelope for approval/envelope creation |
 | `GET /v1/teams/{team_id}/scopes/{scope}/pull-bundle` | `env pull`, `run`, `env push`, `env set` | Return active envelope and encrypted current values |

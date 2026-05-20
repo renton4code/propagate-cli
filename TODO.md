@@ -1,1 +1,1 @@
-- Every propagate run pulls cloud config before starting the child process. Developers running propagate run -- npm run dev repeatedly will hit latency on every restart. Add a --no-sync flag.
+- No open TODOs.
