@@ -389,7 +389,7 @@ func renderEnvStatusResult(w io.Writer, jsonOutput bool, noColor bool, result En
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate env status", false)
+	renderCommandTitle(w, style, "Env status", false)
 	switch result.Status {
 	case "no_change":
 		renderNote(w, style, "No env values stored for this scope.")

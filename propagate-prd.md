@@ -142,7 +142,7 @@ All non-JSON command output should use one consistent Propagate style so users a
 
 Human-readable output should:
 
-- Start with a bold command title, such as `Propagate init`, `Propagate config status`, or `Propagate env pull`.
+- Start with a bold, descriptive title that communicates what happened (e.g. `Project setup`, `Config status`, `Env pull`) rather than echoing the command name.
 - Add `(dry run)` to the title for dry-run executions.
 - Use semantic status markers consistently:
   - `✓` for completed or successful actions.
@@ -156,6 +156,43 @@ Human-readable output should:
 - Never print plaintext env values in human output, JSON output, errors, warnings, next steps, or panic paths.
 
 Help and version output may remain plain and script-friendly.
+
+### 6.0.1 `propagate quickstart`
+
+Orchestrator command for the first useful onboarding action in a repository. When no `propagate.yaml` exists, it is for a management member setting up a project and inviting one developer in the same run. That mode must behave like `propagate init` followed by `propagate team invite`, while keeping both underlying commands available. When `propagate.yaml` already exists, it must behave like `propagate team join --init`.
+
+#### Behavior
+
+1. Collect the same setup inputs as `propagate init`: handle, team name, confirmation, and optional agent guidance.
+2. Collect one invite label, plus optional default management/scopes for the invited developer.
+3. In a real run, require an API URL before writing local setup files because the invite must be created in the cloud.
+4. Run project setup, including encrypted initial env upload.
+5. Create one PIN-backed invite for the developer.
+6. Print the PIN once and tell the management member to share it through a trusted channel.
+7. Suggest committing reviewed `propagate.yaml` and agent guidance changes.
+8. If `propagate.yaml` already exists, skip the invite-label and setup-plus-invite flow and run the same existing-project init and join flow as `propagate team join --init`.
+
+Interactive quickstart must allow the user to fill missing setup fields, invite label, developer invite scopes, join mode, invite selection, and PIN through TUI or line prompts. Non-interactive new-project quickstart may default an omitted developer invite scope to `dev=read` when a `dev` scope exists.
+
+#### Non-interactive usage
+
+```bash
+propagate quickstart --handle maya@example.com --team-name "Acme API" --invite-label "Bob onboarding" --scope dev=read --yes --non-interactive
+```
+
+Missing `--invite-label` in non-interactive mode must fail before project setup writes.
+
+For existing configured projects:
+
+```bash
+propagate quickstart --handle bob@example.com
+```
+
+This is equivalent to:
+
+```bash
+propagate team join --init --handle bob@example.com
+```
 
 ### 6.1 `propagate init`
 
@@ -279,7 +316,7 @@ propagate team join --init --handle bob@example.com --scope dev=read
 Example output (git-mediated join):
 
 ```text
-Propagate team join
+Joining team
 
 ✓ Join request added to propagate.yaml.
 • You do not have secret access yet.
@@ -1153,6 +1190,15 @@ git commit -m "Set up Propagate"
 git push
 ```
 
+Quickstart flow for setup plus one developer invite:
+
+```bash
+propagate quickstart --invite-label "Bob onboarding"
+git add propagate.yaml
+git commit -m "Set up Propagate"
+git push
+```
+
 New developer flow:
 
 ```bash
@@ -1195,6 +1241,7 @@ MVP success metrics:
 
 - Local keypair creation.
 - Handle setup.
+- `propagate quickstart`.
 - `propagate init`.
 - `propagate team join`.
 - `propagate scope create`.

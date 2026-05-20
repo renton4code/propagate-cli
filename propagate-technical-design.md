@@ -53,7 +53,7 @@ The CLI should be organized around small packages with clear boundaries.
 
 | Area | Responsibility |
 | --- | --- |
-| Command layer | Defines `init`, `team`, `scope`, `config`, and `env` command groups; handles flags, output mode, output style, and exit codes |
+| Command layer | Defines `quickstart`, `init`, `team`, `scope`, `config`, and `env` command groups; handles flags, output mode, output style, and exit codes |
 | TUI layer | Bubble Tea models for setup, env import, env push, config approval, and config variable edit flows |
 | Identity layer | Creates, loads, validates, and stores local signing/encryption keys and handle metadata |
 | Config layer | Reads, validates, normalizes, and writes `propagate.yaml` |
@@ -96,6 +96,7 @@ The shared output renderer should provide:
 Human result renderers should use this shared style for the command groups:
 
 - `propagate init`
+- `propagate quickstart`
 - `propagate run`
 - `propagate team join`
 - `propagate team invite`
@@ -798,6 +799,10 @@ Config writes should preserve comments and ordering where possible. If round-tri
 18. CLI offers to add or update Propagate agent guidance.
 19. If confirmed, CLI writes a managed instruction block or Propagate skill template without env values or private material.
 20. CLI prints a summary with identity path, created scopes, uploaded variable count, agent guidance status, and next Git steps.
+
+When no `propagate.yaml` exists, `propagate quickstart` runs this setup flow and then immediately runs the one-invite management path from `propagate team invite`. A real new-project quickstart run requires a cloud API URL so the combined workflow cannot stop at local-only setup without producing the developer invite. The developer invite scope selection should be promptable; non-interactive runs can default to `dev=read` when a `dev` scope exists.
+
+When `propagate.yaml` exists, `propagate quickstart` switches to the developer path and behaves like `propagate team join --init`. It should use the same existing-project init, join-mode, invite-code, and PIN prompts, so a human can complete the flow without pre-supplying flags.
 
 Failure handling:
 
@@ -1519,6 +1524,7 @@ Operational recommendations:
 ### Phase 4: Core CLI Flows
 
 - `propagate init`.
+- `propagate quickstart`.
 - `propagate team join`.
 - `propagate scope create`.
 - `propagate config status`.

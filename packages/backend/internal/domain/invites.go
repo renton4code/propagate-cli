@@ -16,7 +16,6 @@ type RelayScopeKey struct {
 type CreateTeamInviteRequest struct {
 	OperationID         string            `json:"operation_id"`
 	Label               string            `json:"label"`
-	RequestedRole       string            `json:"requested_role,omitempty"`
 	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
 	ScopeKeyBundle      []RelayScopeKey   `json:"scope_key_bundle,omitempty"`
@@ -32,13 +31,6 @@ func (r CreateTeamInviteRequest) Validate() error {
 	}
 	if len(r.Label) > 200 {
 		return fmt.Errorf("label is too long")
-	}
-	role := strings.TrimSpace(r.RequestedRole)
-	if role == "" {
-		role = "developers"
-	}
-	if err := ValidateRole(role); err != nil {
-		return err
 	}
 	for scope, perm := range r.RequestedScopes {
 		if err := ValidateScopeName(scope); err != nil {
@@ -86,7 +78,6 @@ type InvitePINRequest struct {
 	PIN                 string            `json:"pin"`
 	Joiner              PublicIdentity    `json:"joiner"`
 	Handle              string            `json:"handle"`
-	RequestedRole       string            `json:"requested_role,omitempty"`
 	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
 	Client              ClientMetadata    `json:"client,omitempty"`
@@ -104,13 +95,6 @@ func (r InvitePINRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.Handle) == "" {
 		return fmt.Errorf("handle is required")
-	}
-	role := strings.TrimSpace(r.RequestedRole)
-	if role == "" {
-		role = "developers"
-	}
-	if err := ValidateRole(role); err != nil {
-		return err
 	}
 	for scope, perm := range r.RequestedScopes {
 		if err := ValidateScopeName(scope); err != nil {

@@ -14,16 +14,12 @@ func (s *SQLStore) CreateJoinRequest(ctx context.Context, teamID string, request
 	if err != nil {
 		return err
 	}
-	role := request.RequestedRole
-	if role == "" {
-		role = "developers"
-	}
 	_, err = s.db.ExecContext(ctx, `
 		insert into members (team_id, handle, public_key_sha, signing_public_key, encryption_public_key,
-			role, management, status, requested_role, requested_management, requested_scopes, created_at)
-		values ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10, $11)
+			management, status, requested_management, requested_scopes, created_at)
+		values ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
 	`, teamID, request.Joiner.Handle, request.Joiner.PublicKeySHA, request.Joiner.SigningPublicKey, request.Joiner.EncryptionPublicKey,
-		role, false, role, request.RequestedManagement, scopesJSON, serverTime)
+		request.RequestedManagement, request.RequestedManagement, scopesJSON, serverTime)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrJoinRequestDuplicate
@@ -71,16 +67,11 @@ func (s *SQLStore) ApproveJoinRequest(ctx context.Context, teamID string, public
 		return domain.ApproveJoinResult{}, err
 	}
 
-	role := request.GrantedRole
-	if role == "" {
-		role = "developers"
-	}
-
 	_, err = tx.ExecContext(ctx, `
 		update members
-		set status = 'active', role = $3, management = $4, approved_by_key_sha = $5, approved_at = now()
+		set status = 'active', management = $3, approved_by_key_sha = $4, approved_at = now()
 		where team_id = $1 and public_key_sha = $2 and status = 'pending'
-	`, teamID, publicKeySHA, role, request.GrantedManagement, actor.PublicKeySHA)
+	`, teamID, publicKeySHA, request.GrantedManagement, actor.PublicKeySHA)
 	if err != nil {
 		return domain.ApproveJoinResult{}, err
 	}
@@ -163,7 +154,7 @@ func (s *SQLStore) DeclineJoinRequest(ctx context.Context, teamID string, public
 func listPendingJoinRequestsSQL(ctx context.Context, db *sql.DB, teamID string) ([]domain.JoinRequestRow, error) {
 	rows, err := db.QueryContext(ctx, `
 		select handle, public_key_sha, signing_public_key, encryption_public_key,
-			requested_role, requested_management, requested_scopes, created_at
+			requested_management, requested_scopes, created_at
 		from members
 		where team_id = $1 and status = 'pending'
 		order by created_at asc
@@ -179,7 +170,7 @@ func listPendingJoinRequestsSQL(ctx context.Context, db *sql.DB, teamID string) 
 		var scopesJSON []byte
 		var createdAt sql.NullTime
 		if err := rows.Scan(&row.Handle, &row.PublicKeySHA, &row.SigningPublicKey, &row.EncryptionPublicKey,
-			&row.RequestedRole, &row.RequestedManagement, &scopesJSON, &createdAt); err != nil {
+			&row.RequestedManagement, &scopesJSON, &createdAt); err != nil {
 			return nil, err
 		}
 		if scopesJSON != nil {

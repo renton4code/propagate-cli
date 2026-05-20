@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 const INCOMING_MENTION = "@here";
 const INCOMING_REST = " just pulled main and the app won't start — missing STRIPE_SECRET_KEY and REDIS_URL. Can someone send me the latest .env?";
 const DRAFT_1 = "Check #dev-onboarding, I think Sarah posted a 1Password link last week but it might be expired...";
-const DRAFT_2 = "Pull the latest .env with propagate — everyone gets updated vars automatically and securely.";
+const DRAFT_2 = "Use propagate to pull the up-to-date secrets — everyone gets updated env vars automatically and securely.";
 
 function buildKeystrokeWeights(text: string): number[] {
   const w: number[] = [];

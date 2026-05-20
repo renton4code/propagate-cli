@@ -578,7 +578,7 @@ func renderInitResult(w io.Writer, jsonOutput bool, noColor bool, result InitRes
 	}
 
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate init", result.DryRun)
+	renderCommandTitle(w, style, "Project setup", result.DryRun)
 
 	renderInitIdentity(w, style, result)
 	fmt.Fprintln(w)

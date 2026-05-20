@@ -35,9 +35,6 @@ type ScopeSummary struct {
 	Name      string
 	EnvFiles  []string
 	Variables []VariableDeclaration
-	// DefaultRoleAccess is retained for older propagate.yaml files and cloud
-	// snapshots. New renders use per-member scope grants instead.
-	DefaultRoleAccess map[string]string
 }
 
 const (
@@ -59,7 +56,6 @@ type Member struct {
 	PublicKeySHA        string            `json:"public_key_sha"`
 	SigningPublicKey    string            `json:"signing_public_key"`
 	EncryptionPublicKey string            `json:"encryption_public_key"`
-	Role                string            `json:"role,omitempty"`
 	Management          bool              `json:"management,omitempty"`
 	Scopes              map[string]string `json:"scopes,omitempty"`
 }
@@ -361,8 +357,7 @@ func ReadProject(path string) (ParsedProject, error) {
 				currentVariable = -1
 				scopeIndex[name] = len(parsed.Scopes)
 				parsed.Scopes = append(parsed.Scopes, ScopeSummary{
-					Name:              name,
-					DefaultRoleAccess: map[string]string{},
+					Name: name,
 				})
 				continue
 			}
@@ -388,6 +383,10 @@ func ReadProject(path string) (ParsedProject, error) {
 				case ok && key == "env_files" && value != "[]":
 					return ParsedProject{}, fmt.Errorf("scope %s env_files must be a list", currentScope)
 				}
+				continue
+			}
+			if inDefaultAccess && indent == 6 {
+				// Legacy default_role_access block — skip silently.
 				continue
 			}
 			if inVariables && indent == 6 && strings.HasPrefix(trimmed, "- ") {
@@ -419,19 +418,6 @@ func ReadProject(path string) (ParsedProject, error) {
 				idx := scopeIndex[currentScope]
 				parsed.Scopes[idx].EnvFiles = append(parsed.Scopes[idx].EnvFiles, value)
 				continue
-			}
-			if inDefaultAccess && indent == 6 {
-				role, permission, ok := splitKeyValue(trimmed)
-				if !ok {
-					continue
-				}
-				if err := ValidateRole(role); err != nil {
-					return ParsedProject{}, err
-				}
-				if err := ValidatePermission(permission); err != nil {
-					return ParsedProject{}, err
-				}
-				parsed.Scopes[scopeIndex[currentScope]].DefaultRoleAccess[role] = permission
 			}
 		case "members":
 			if indent == 2 && strings.HasPrefix(trimmed, "- ") {
@@ -533,7 +519,7 @@ func assignMemberField(member *Member, key, value string) {
 	case "encryption_public_key":
 		member.EncryptionPublicKey = value
 	case "role":
-		member.Role = value
+		// Legacy field — ignored.
 	case "management":
 		member.Management = parseBool(value)
 	}
@@ -556,10 +542,6 @@ func assignVariableField(variable *VariableDeclaration, key, value string) {
 	}
 }
 
-func (p ParsedProject) DefaultRequestedScopes(role string) map[string]string {
-	return p.DefaultRequestedAccess(role == "admins")
-}
-
 func (p ParsedProject) DefaultRequestedAccess(management bool) map[string]string {
 	if management {
 		out := map[string]string{}
@@ -570,14 +552,9 @@ func (p ParsedProject) DefaultRequestedAccess(management bool) map[string]string
 	}
 	out := map[string]string{}
 	for _, scope := range p.Scopes {
-		permission := scope.DefaultRoleAccess["developers"]
-		if permission == "" && scope.Name == "dev" {
-			permission = "read"
+		if scope.Name == "dev" {
+			out[scope.Name] = "read"
 		}
-		if permission == "" || permission == "none" {
-			continue
-		}
-		out[scope.Name] = permission
 	}
 	if len(out) == 0 && len(p.Scopes) == 1 {
 		out[p.Scopes[0].Name] = "read"
@@ -720,7 +697,6 @@ func SnapshotJSON(project ParsedProject) ([]byte, error) {
 	members := append([]Member(nil), project.Members...)
 	for idx, member := range members {
 		member = NormalizeMemberAccess(member, project.Scopes)
-		member.Role = ""
 		members[idx] = member
 		if err := ValidateMember(member); err != nil {
 			return nil, fmt.Errorf("member %d: %w", idx+1, err)
@@ -746,9 +722,6 @@ func ConfigHash(project ParsedProject) (string, error) {
 
 func ValidateMember(member Member) error {
 	if err := validatePublicIdentity(member.Handle, member.PublicKeySHA, member.SigningPublicKey, member.EncryptionPublicKey); err != nil {
-		return err
-	}
-	if err := ValidateRole(member.Role); err != nil {
 		return err
 	}
 	for scope, permission := range member.Scopes {
@@ -808,15 +781,6 @@ func envfileNamePattern(name string) bool {
 	return first == '_' || first >= 'A' && first <= 'Z' || first >= 'a' && first <= 'z'
 }
 
-func ValidateRole(role string) error {
-	switch role {
-	case "", "admins", "developers":
-		return nil
-	default:
-		return fmt.Errorf("unsupported role %q", role)
-	}
-}
-
 func ValidatePermission(permission string) error {
 	switch permission {
 	case "none", "read", "write", "admin":
@@ -831,20 +795,14 @@ func ValidateScopeName(name string) error {
 }
 
 func NormalizeMemberAccess(member Member, scopes []ScopeSummary) Member {
-	if member.Role == "admins" {
-		member.Management = true
-	}
 	if member.Scopes == nil {
 		member.Scopes = map[string]string{}
-	}
-	if len(member.Scopes) == 0 && member.Role != "" {
-		member.Scopes = legacyScopesForRole(member.Role, scopes)
 	}
 	return member
 }
 
 func MemberCanManage(member Member) bool {
-	return member.Management || member.Role == "admins"
+	return member.Management
 }
 
 func MemberScopePermission(member Member, scope ScopeSummary) string {
@@ -853,21 +811,6 @@ func MemberScopePermission(member Member, scope ScopeSummary) string {
 		return permission
 	}
 	return ""
-}
-
-func legacyScopesForRole(role string, scopes []ScopeSummary) map[string]string {
-	out := map[string]string{}
-	for _, scope := range scopes {
-		permission := scope.DefaultRoleAccess[role]
-		if permission == "" && role == "admins" {
-			permission = "write"
-		}
-		if permission == "" || permission == "none" {
-			continue
-		}
-		out[scope.Name] = permission
-	}
-	return out
 }
 
 func sortedVariableDeclarations(variables []VariableDeclaration) []VariableDeclaration {

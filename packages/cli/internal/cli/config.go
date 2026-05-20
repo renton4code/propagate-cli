@@ -476,7 +476,7 @@ func renderConfigPushResult(w io.Writer, jsonOutput bool, noColor bool, result C
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate config push", result.DryRun)
+	renderCommandTitle(w, style, "Config push", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Config push dry run complete.")

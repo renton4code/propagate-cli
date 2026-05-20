@@ -21,6 +21,7 @@ Propagate is organized as a Go monorepo.
 ```bash
 go test ./packages/cli/... ./packages/backend/...
 go run ./packages/cli/cmd/propagate version
+go run ./packages/cli/cmd/propagate quickstart --help
 ```
 
 ## Local Docker Stack

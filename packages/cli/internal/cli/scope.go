@@ -263,7 +263,7 @@ func renderScopeCreateResult(w io.Writer, jsonOutput bool, noColor bool, result 
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate scope create", result.DryRun)
+	renderCommandTitle(w, style, "Scope created", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Scope create dry run complete.")

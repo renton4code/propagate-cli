@@ -34,11 +34,11 @@ func TestTeamStatusShowsCloudActivity(t *testing.T) {
 				SigningPublicKey:    rawSigningKey,
 				EncryptionPublicKey: rawEncryptionKey,
 			},
-			Role:   "admins",
-			Status: "active",
+			Management: true,
+			Status:     "active",
 		},
 		Members: map[string][]apiclient.Member{
-			"admins": {
+			"management": {
 				{
 					PublicIdentity: apiclient.PublicIdentity{
 						Handle:              ident.Handle,
@@ -46,11 +46,11 @@ func TestTeamStatusShowsCloudActivity(t *testing.T) {
 						SigningPublicKey:    rawSigningKey,
 						EncryptionPublicKey: rawEncryptionKey,
 					},
-					Role:   "admins",
-					Status: "active",
+					Management: true,
+					Status:     "active",
 				},
 			},
-			"developers": {
+			"members": {
 				{
 					PublicIdentity: apiclient.PublicIdentity{
 						Handle:              "bob@example.com",
@@ -58,7 +58,6 @@ func TestTeamStatusShowsCloudActivity(t *testing.T) {
 						SigningPublicKey:    "bob-signing-public-key",
 						EncryptionPublicKey: "bob-encryption-public-key",
 					},
-					Role:   "developers",
 					Status: "active",
 				},
 			},
@@ -80,7 +79,6 @@ func TestTeamStatusShowsCloudActivity(t *testing.T) {
 					SigningPublicKey:    "bob-signing-public-key",
 					EncryptionPublicKey: "bob-encryption-public-key",
 				},
-				Role:   "developers",
 				Status: "active",
 			},
 		},
@@ -150,11 +148,11 @@ func TestTeamStatusJSONOmitsRawPublicKeys(t *testing.T) {
 					SigningPublicKey:    "json-signing-public-key",
 					EncryptionPublicKey: "json-encryption-public-key",
 				},
-				Role:   "admins",
-				Status: "active",
+				Management: true,
+				Status:     "active",
 			},
 			Members: map[string][]apiclient.Member{
-				"admins": {
+				"management": {
 					{
 						PublicIdentity: apiclient.PublicIdentity{
 							Handle:              ident.Handle,
@@ -162,8 +160,8 @@ func TestTeamStatusJSONOmitsRawPublicKeys(t *testing.T) {
 							SigningPublicKey:    "json-signing-public-key",
 							EncryptionPublicKey: "json-encryption-public-key",
 						},
-						Role:   "admins",
-						Status: "active",
+						Management: true,
+						Status:     "active",
 					},
 				},
 			},
@@ -190,8 +188,8 @@ func TestTeamStatusJSONOmitsRawPublicKeys(t *testing.T) {
 			t.Fatalf("team status JSON leaked raw key field/value %q\nstdout:\n%s\nstderr:\n%s", forbidden, stdout.String(), stderr.String())
 		}
 	}
-	if !strings.Contains(stdout.String(), `"current_role": "management"`) {
-		t.Fatalf("JSON output missing current role:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), `"current_management": true`) {
+		t.Fatalf("JSON output missing current_management:\n%s", stdout.String())
 	}
 }
 

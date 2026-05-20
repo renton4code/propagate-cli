@@ -342,6 +342,8 @@ Behavior:
 
 ### 9.2 `POST /v1/teams/setup`
 
+Used by: `propagate init` and `propagate quickstart`.
+
 Authentication: signed request using the first management member's local identity.
 
 Required permission: none, because this creates a new team. The request signature still proves control of the submitted signing private key.
@@ -648,6 +650,8 @@ Behavior:
 - Do not return env values, masked values, prompts, or private material.
 
 ### 9.12 `POST /v1/teams/{team_id}/invites` (planned)
+
+Used by: `propagate team invite` and `propagate quickstart`.
 
 Authentication: signed.
 

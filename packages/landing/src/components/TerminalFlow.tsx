@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 export type TerminalLine =
   | { kind: "cmd";    text: string }
   | { kind: "output"; text: string }
+  | { kind: "prompt"; label: string; value: string }
+  | { kind: "choice"; label: string; options: { text: string; checked: boolean }[] }
   | { kind: "blank" };
 
 export type TerminalDef = {
@@ -20,6 +22,8 @@ export type TerminalDef = {
 function lineWeight(line: TerminalLine): number {
   if (line.kind === "blank")  return 2;
   if (line.kind === "output") return 3;
+  if (line.kind === "prompt") return Math.max(10, line.value.length * 0.9);
+  if (line.kind === "choice") return 6 + line.options.length * 2;
   return Math.max(10, line.text.length * 0.9);
 }
 
@@ -53,7 +57,10 @@ function charsAt(text: string, t: number): number {
 type LineState =
   | { kind: "hidden" }
   | { kind: "partial"; text: string }
-  | { kind: "full";    text: string };
+  | { kind: "full";    text: string }
+  | { kind: "prompt_partial"; value: string }
+  | { kind: "prompt_full";    value: string }
+  | { kind: "choice_full" };
 
 /**
  * Returns line states AND exactly one `activeCmdLine` index — the single line
@@ -92,9 +99,23 @@ function computeLines(
       return within > 0 ? { kind: "full", text: line.text } : { kind: "hidden" };
     }
 
+    if (line.kind === "prompt") {
+      const revealed = charsAt(line.value, within);
+      if (revealed === line.value.length) {
+        lastFullCmd = i;
+        return { kind: "prompt_full", value: line.value };
+      }
+      partialCmd = i;
+      return { kind: "prompt_partial", value: line.value.slice(0, revealed) };
+    }
+
+    if (line.kind === "choice") {
+      return within > 0 ? { kind: "choice_full" } : { kind: "hidden" };
+    }
+
     // cmd line
     const revealed = charsAt(line.text, within);
-    if (revealed === line.text) {
+    if (revealed === line.text.length) {
       lastFullCmd = i;
       return { kind: "full", text: line.text };
     }
@@ -142,7 +163,36 @@ function TerminalLineRow({
 
   if (line.kind === "blank") return <div style={{ height: "0.75rem" }} />;
 
-  const text     = state.text ?? "";
+  if (line.kind === "prompt" && (state.kind === "prompt_partial" || state.kind === "prompt_full")) {
+    return (
+      <div
+        className="font-mono text-sm leading-relaxed"
+        style={{ display: "flex", alignItems: "baseline", columnGap: 0 }}
+      >
+        <span style={{ color: "#FFE500", marginRight: "0.5ch", flexShrink: 0 }}>▸</span>
+        <span style={{ color: "#888" }}>{line.label}:&nbsp;</span>
+        <span style={{ color: "#fff" }}>
+          {state.value}
+          {hasCursor && <Caret />}
+        </span>
+      </div>
+    );
+  }
+
+  if (line.kind === "choice" && state.kind === "choice_full") {
+    return (
+      <div className="font-mono text-sm leading-relaxed" style={{ paddingLeft: "1.5ch" }}>
+        <div style={{ color: "#FFE500", marginBottom: "0.25rem" }}>▸ {line.label}</div>
+        {line.options.map((opt, i) => (
+          <div key={i} style={{ paddingLeft: "2ch", color: opt.checked ? "#FFE500" : "#555" }}>
+            [{opt.checked ? "x" : " "}] {opt.text}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const text     = ("text" in state ? state.text : "") ?? "";
   const isCheck  = text.startsWith("✓");
   const isWarn   = text.startsWith("!");
   const isNote   = text.startsWith("•");

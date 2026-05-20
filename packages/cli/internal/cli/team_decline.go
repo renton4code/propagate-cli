@@ -107,7 +107,7 @@ func renderTeamDeclineResult(w io.Writer, jsonOutput bool, noColor bool, result 
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate team decline", result.DryRun)
+	renderCommandTitle(w, style, "Decline request", result.DryRun)
 	if result.DryRun {
 		renderNote(w, style, fmt.Sprintf("Would decline join request for %s.", result.PublicKeySHA))
 	} else {

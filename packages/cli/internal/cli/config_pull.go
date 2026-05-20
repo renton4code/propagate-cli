@@ -327,7 +327,7 @@ func renderConfigPullResult(w io.Writer, jsonOutput bool, noColor bool, result C
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate config pull", result.DryRun)
+	renderCommandTitle(w, style, "Config pull", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Config pull dry run complete.")

@@ -577,7 +577,7 @@ func renderEnvSetResult(w io.Writer, jsonOutput bool, noColor bool, result EnvSe
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate env set", result.DryRun)
+	renderCommandTitle(w, style, "Env set", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Env set dry run complete.")

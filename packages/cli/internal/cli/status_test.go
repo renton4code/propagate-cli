@@ -68,11 +68,11 @@ func TestStatusJSONCombinesSeparateStatuses(t *testing.T) {
 				SigningPublicKey:    "raw-signing-public-key",
 				EncryptionPublicKey: "raw-encryption-public-key",
 			},
-			Role:   "admins",
-			Status: "active",
+			Management: true,
+			Status:     "active",
 		},
 		Members: map[string][]apiclient.Member{
-			"admins": {
+			"management": {
 				{
 					PublicIdentity: apiclient.PublicIdentity{
 						Handle:              ident.Handle,
@@ -80,8 +80,8 @@ func TestStatusJSONCombinesSeparateStatuses(t *testing.T) {
 						SigningPublicKey:    "raw-signing-public-key",
 						EncryptionPublicKey: "raw-encryption-public-key",
 					},
-					Role:   "admins",
-					Status: "active",
+					Management: true,
+					Status:     "active",
 				},
 			},
 		},
@@ -150,7 +150,7 @@ func TestStatusJSONCombinesSeparateStatuses(t *testing.T) {
 	if result.Config == nil || result.Config.State != "equal" {
 		t.Fatalf("config status missing or unexpected: %+v", result.Config)
 	}
-	if result.Team == nil || result.Team.CurrentRole != "management" {
+	if result.Team == nil || !result.Team.CurrentManagement {
 		t.Fatalf("team status missing or unexpected: %+v", result.Team)
 	}
 	if result.Env == nil || result.Env.VariablesCount != 1 {
@@ -184,9 +184,9 @@ func TestStatusShowsPartialLocalFactsWithoutAPIURL(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Unified status incomplete",
-		"Propagate config status",
+		"Config status",
 		"Local revision: rev_00001",
-		"Propagate team status",
+		"Team status",
 		"Members:",
 	} {
 		if !strings.Contains(stdout.String(), want) {

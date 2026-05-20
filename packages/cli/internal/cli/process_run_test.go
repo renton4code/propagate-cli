@@ -188,9 +188,8 @@ func TestProcessRunPullsConfigBeforeBundleWhenScopeMissingLocally(t *testing.T) 
 	cloudProject.CloudRevision = "rev_00002"
 	cloudProject.SyncStatus = "synced"
 	cloudProject.Scopes = append(cloudProject.Scopes, config.ScopeSummary{
-		Name:              "staging",
-		EnvFiles:          []string{".env.staging"},
-		DefaultRoleAccess: map[string]string{"developers": "read", "admins": "write"},
+		Name:     "staging",
+		EnvFiles: []string{".env.staging"},
 	})
 	cloudConfig := testConfigData(t, cloudProject)
 	bundle := encryptedPullBundleForScopeAndFiles(t, ident, project.TeamID, "staging", map[envVarKey]string{

@@ -273,6 +273,47 @@ The nonce and operation ID are different:
 
 ## 6. Command Contracts
 
+### 6.0 `propagate quickstart`
+
+Purpose: orchestrate the first useful onboarding step for the current repository. If `propagate.yaml` is absent, run new-project setup and create one developer PIN invite in a single command. This is equivalent to a successful `propagate init` followed by `propagate team invite` for one developer. If `propagate.yaml` is present, behave like `propagate team join --init`.
+
+Inputs:
+
+| Input | Required | Notes |
+| --- | --- | --- |
+| Handle | Required only when creating identity | Same behavior as `propagate init` |
+| Team name | Required only for new project setup | Same behavior as `propagate init` |
+| Invite label | Yes | Prompt in interactive mode; required as `--invite-label` or `--label` in non-interactive mode |
+| Default management/scopes | Optional | Same semantics as `propagate team invite`; prompt in interactive mode when omitted for a new project |
+| Agent guidance targets | Optional | Same behavior as `propagate init` |
+| Join mode / invite PIN | Existing project only | Same behavior as `propagate team join --init` |
+
+For a new project, local reads and writes are the union of `propagate init` and `propagate team invite`. Non-dry-run new-project quickstart requires an API URL because the invite cannot be created in local-only mode. If invite scopes are omitted, interactive mode prompts for read scopes and non-interactive mode defaults to `dev=read` when a `dev` scope exists.
+
+For an existing project, local reads and writes match `propagate team join --init`. Interactive mode can prompt for missing handle, agent guidance, join mode, invite selection, and PIN.
+
+API calls:
+
+- `POST /v1/teams/setup` for new project setup.
+- `POST /v1/teams/{team_id}/invites` for the developer invite.
+- Optional relay/scope-key reads used by `propagate team invite`.
+- Existing project: same API calls as `propagate team join --init`.
+
+Success result:
+
+| Field | Meaning |
+| --- | --- |
+| `init` | Nested setup result |
+| `invite` | Nested invite result, including one-time PIN when created |
+| `join` | Nested team-join result when config already existed |
+| `next_steps` | Share PIN and commit reviewed metadata/guidance changes |
+
+Failure behavior:
+
+- If invite label is missing in non-interactive mode, fail before setup writes.
+- If API URL is missing for a real run, fail before setup writes.
+- If setup succeeds but invite creation fails, report the invite error; the project setup remains complete and reviewable.
+
 ### 6.1 `propagate init`
 
 Purpose: create or load local identity, initialize project config when absent, upload initial encrypted values, and offer agent guidance.
@@ -1361,6 +1402,7 @@ Recommended implementation sequence:
 10. New project setup without agent guidance.
 11. `team join`.
 11a. `team invite` (PIN invites) after join and cloud invite APIs exist.
+11b. `quickstart` as orchestration over setup plus one invite.
 12. `config pull`.
 13. `config push`.
 14. `env pull`.

@@ -114,7 +114,6 @@ func runTeamApprove(targetSHA string, dryRun bool, opts globalOptions, streams S
 	approveReq := apiclient.ApproveJoinRequestBody{
 		OperationID:       opID,
 		ScopeKeyEnvelopes: envelopes,
-		GrantedRole:       target.RequestedRole,
 		GrantedManagement: target.RequestedManagement,
 		GrantedScopes:     grantedScopes,
 		Client:            apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
@@ -212,7 +211,7 @@ func renderTeamApproveResult(w io.Writer, jsonOutput bool, noColor bool, result 
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate team approve", result.DryRun)
+	renderCommandTitle(w, style, "Approve member", result.DryRun)
 	if result.DryRun {
 		renderNote(w, style, fmt.Sprintf("Would approve join request for %s.", result.PublicKeySHA))
 	} else {

@@ -89,7 +89,7 @@ func runTeamInviteCreate(args []string, global globalOptions, streams Streams) i
 		return ExitSuccess
 	}
 	style := newOutputStyle(opts.NoColor)
-	renderCommandTitle(streams.Out, style, "Propagate team invite", opts.DryRun)
+	renderCommandTitle(streams.Out, style, "Developer invite", opts.DryRun)
 	if result.DryRun {
 		renderNote(streams.Out, style, "Dry run: no invite was created.")
 	} else {
@@ -274,7 +274,7 @@ func runTeamInviteList(args []string, global globalOptions, streams Streams) int
 		return ExitSuccess
 	}
 	style := newOutputStyle(global.NoColor)
-	renderCommandTitle(streams.Out, style, "Propagate team invite list", false)
+	renderCommandTitle(streams.Out, style, "Active invites", false)
 	for _, inv := range data.Invites {
 		fmt.Fprintf(streams.Out, "• %s  %s  (%s attempts=%d)\n", inv.InviteID, inv.Label, inv.Status, inv.FailedPINAttempts)
 	}

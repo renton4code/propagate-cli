@@ -507,7 +507,7 @@ func renderEnvPullResult(w io.Writer, jsonOutput bool, noColor bool, result EnvP
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate env pull", result.DryRun)
+	renderCommandTitle(w, style, "Env pull", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Env pull dry run complete.")

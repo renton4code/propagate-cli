@@ -85,9 +85,9 @@ func (s *SQLStore) CreateTeamSetup(ctx context.Context, request domain.TeamSetup
 	if _, err := tx.ExecContext(ctx, `
 		insert into members (
 			team_id, handle, public_key_sha, signing_public_key, encryption_public_key,
-			role, management, status, approved_by_key_sha, approved_at
+			management, status, approved_by_key_sha, approved_at
 		)
-		values ($1, $2, $3, $4, $5, 'admins', true, 'active', $3, now())
+		values ($1, $2, $3, $4, $5, true, 'active', $3, now())
 	`, teamID, request.FirstAdmin.Handle, request.FirstAdmin.PublicKeySHA, request.FirstAdmin.SigningPublicKey, request.FirstAdmin.EncryptionPublicKey); err != nil {
 		return domain.SetupResult{}, err
 	}
@@ -108,16 +108,6 @@ func (s *SQLStore) CreateTeamSetup(ctx context.Context, request domain.TeamSetup
 				insert into env_file_mappings (team_id, scope_id, path, config_revision, active)
 				values ($1, $2, $3, 1, true)
 			`, teamID, scopeID, path); err != nil {
-				return domain.SetupResult{}, err
-			}
-		}
-		for role, permission := range scope.DefaultRoleAccess {
-			if _, err := tx.ExecContext(ctx, `
-				insert into scope_access_rules (
-					team_id, scope_id, subject_type, subject_value, permission, config_revision, active
-				)
-				values ($1, $2, 'role', $3, $4, 1, true)
-			`, teamID, scopeID, role, permission); err != nil {
 				return domain.SetupResult{}, err
 			}
 		}
@@ -316,7 +306,7 @@ func scopeKind(name string) string {
 func (s *SQLStore) GetMember(ctx context.Context, teamID string, publicKeySHA string) (domain.Member, error) {
 	var member domain.Member
 	err := s.db.QueryRowContext(ctx, `
-		select handle, public_key_sha, signing_public_key, encryption_public_key, role, management, status
+		select handle, public_key_sha, signing_public_key, encryption_public_key, management, status
 		from members
 		where team_id = $1 and public_key_sha = $2 and status = 'active'
 	`, teamID, publicKeySHA).Scan(
@@ -324,7 +314,6 @@ func (s *SQLStore) GetMember(ctx context.Context, teamID string, publicKeySHA st
 		&member.PublicKeySHA,
 		&member.SigningPublicKey,
 		&member.EncryptionPublicKey,
-		&member.Role,
 		&member.Management,
 		&member.Status,
 	)
@@ -756,7 +745,7 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 		return domain.TeamStatusData{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		select handle, public_key_sha, signing_public_key, encryption_public_key, role, management, status
+		select handle, public_key_sha, signing_public_key, encryption_public_key, management, status
 		from members
 		where team_id = $1 and status = 'active'
 		order by management desc, public_key_sha
@@ -770,7 +759,7 @@ func (s *SQLStore) TeamStatus(ctx context.Context, teamID string, actor domain.M
 	var all []domain.Member
 	for rows.Next() {
 		var member domain.Member
-		if err := rows.Scan(&member.Handle, &member.PublicKeySHA, &member.SigningPublicKey, &member.EncryptionPublicKey, &member.Role, &member.Management, &member.Status); err != nil {
+		if err := rows.Scan(&member.Handle, &member.PublicKeySHA, &member.SigningPublicKey, &member.EncryptionPublicKey, &member.Management, &member.Status); err != nil {
 			return domain.TeamStatusData{}, err
 		}
 		scopes, err := memberScopesSQL(ctx, s.db, teamID, member.PublicKeySHA)
@@ -841,8 +830,7 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 			Scopes              map[string]string `json:"scopes"`
 		} `json:"members"`
 		Scopes map[string]struct {
-			EnvFiles          []string          `json:"env_files"`
-			DefaultRoleAccess map[string]string `json:"default_role_access"`
+			EnvFiles []string `json:"env_files"`
 		} `json:"scopes"`
 	}
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
@@ -857,25 +845,20 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 		if member.PublicKeySHA == "" {
 			continue
 		}
-		role := member.Role
-		if role == "" {
-			role = "developers"
-		}
-		management := member.Management || role == "admins"
+		management := member.Management || member.Role == "admins"
 		if _, err := tx.ExecContext(ctx, `
 			insert into members (
 				team_id, handle, public_key_sha, signing_public_key, encryption_public_key,
-				role, management, status, approved_at
+				management, status, approved_at
 			)
-			values ($1, $2, $3, $4, $5, $6, $7, 'active', now())
+			values ($1, $2, $3, $4, $5, $6, 'active', now())
 			on conflict (team_id, public_key_sha) do update set
 				handle = excluded.handle,
 				signing_public_key = excluded.signing_public_key,
 				encryption_public_key = excluded.encryption_public_key,
-				role = excluded.role,
 				management = excluded.management,
 				status = 'active'
-		`, teamID, member.Handle, member.PublicKeySHA, member.SigningPublicKey, member.EncryptionPublicKey, role, management); err != nil {
+		`, teamID, member.Handle, member.PublicKeySHA, member.SigningPublicKey, member.EncryptionPublicKey, management); err != nil {
 			return err
 		}
 	}
@@ -907,16 +890,6 @@ func applyConfigSnapshotSQL(ctx context.Context, tx *sql.Tx, teamID string, revi
 				insert into env_file_mappings (team_id, scope_id, path, config_revision, active)
 				values ($1, $2, $3, $4, true)
 			`, teamID, sid, path, revision); err != nil {
-				return err
-			}
-		}
-		for role, permission := range scope.DefaultRoleAccess {
-			if _, err := tx.ExecContext(ctx, `
-				insert into scope_access_rules (
-					team_id, scope_id, subject_type, subject_value, permission, config_revision, active
-				)
-				values ($1, $2, 'role', $3, $4, $5, true)
-			`, teamID, sid, role, permission, revision); err != nil {
 				return err
 			}
 		}
@@ -994,16 +967,7 @@ func requireScopePermission(ctx context.Context, tx *sql.Tx, teamID string, scop
 		order by id desc
 		limit 1
 	`, teamID, sid, actor.PublicKeySHA).Scan(&permission)
-	if permission == "" {
-		_ = tx.QueryRowContext(ctx, `
-			select permission
-			from scope_access_rules
-			where team_id = $1 and scope_id = $2 and subject_type = 'role' and subject_value = $3 and active = true
-			order by id desc
-			limit 1
-		`, teamID, sid, actor.Role).Scan(&permission)
-	}
-	if permission == "" && actor.Role == "admins" {
+	if permission == "" && actor.Management {
 		permission = "admin"
 	}
 	if !domain.PermissionAllows(permission, required) {

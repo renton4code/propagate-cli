@@ -239,7 +239,7 @@ func renderConfigStatusResult(w io.Writer, jsonOutput bool, noColor bool, result
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate config status", false)
+	renderCommandTitle(w, style, "Config status", false)
 	switch result.Status {
 	case "cloud_unavailable":
 		renderWarning(w, style, "Config local status available; cloud status unavailable.")

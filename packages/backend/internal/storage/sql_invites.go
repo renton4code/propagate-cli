@@ -24,10 +24,6 @@ func (s *SQLStore) CreateTeamInvite(ctx context.Context, teamID string, actor do
 		return domain.CreateTeamInviteResult{}, ErrPermissionDenied
 	}
 
-	role := strings.TrimSpace(request.RequestedRole)
-	if role == "" {
-		role = "developers"
-	}
 	var scopesArg interface{}
 	if len(request.RequestedScopes) > 0 {
 		scopesJSON, mErr := json.Marshal(request.RequestedScopes)
@@ -76,11 +72,11 @@ func (s *SQLStore) CreateTeamInvite(ctx context.Context, teamID string, actor do
 	_, err = s.db.ExecContext(ctx, `
 		insert into team_invites (
 			id, team_id, label, pin_verifier, status, failed_pin_attempts,
-			requested_role, requested_management, requested_scopes, created_by_key_sha,
+			requested_management, requested_scopes, created_by_key_sha,
 			encrypted_scope_key_bundle, relay_key_version
 		)
-		values ($1, $2, $3, $4, 'active', 0, $5, $6, $7::jsonb, $8, $9::jsonb, $10)
-	`, inviteID, teamID, strings.TrimSpace(request.Label), string(hash), role, request.RequestedManagement || role == "admins", scopesArg, actor.PublicKeySHA, bundleArg, relayKeyVersion(request.ScopeKeyBundle))
+		values ($1, $2, $3, $4, 'active', 0, $5, $6::jsonb, $7, $8::jsonb, $9)
+	`, inviteID, teamID, strings.TrimSpace(request.Label), string(hash), request.RequestedManagement, scopesArg, actor.PublicKeySHA, bundleArg, relayKeyVersion(request.ScopeKeyBundle))
 	if err != nil {
 		return domain.CreateTeamInviteResult{}, err
 	}

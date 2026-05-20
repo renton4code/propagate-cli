@@ -721,7 +721,7 @@ func renderEnvPushResult(w io.Writer, jsonOutput bool, noColor bool, result EnvP
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate env push", result.DryRun)
+	renderCommandTitle(w, style, "Env push", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Env push dry run complete.")

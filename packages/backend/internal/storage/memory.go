@@ -54,7 +54,6 @@ type memoryInvite struct {
 	pinVerifier         []byte
 	status              string
 	failedAttempts      int
-	requestedRole       string
 	requestedManagement bool
 	requestedScopes     map[string]string
 	scopeKeyBundle      []domain.RelayScopeKey
@@ -68,7 +67,6 @@ type memoryScope struct {
 	id           string
 	name         string
 	envFiles     []string
-	roleAccess   map[string]string
 	memberAccess map[string]string
 	envelopes    map[string]domain.ScopeKeyEnvelope
 	variables    map[string]*memoryVariable
@@ -158,7 +156,6 @@ func (s *MemoryStore) CreateTeamSetup(_ context.Context, request domain.TeamSetu
 	}
 	team.members[request.FirstAdmin.PublicKeySHA] = domain.Member{
 		PublicIdentity: request.FirstAdmin,
-		Role:           "admins",
 		Management:     true,
 		Scopes:         setupMemberScopes(request.Scopes),
 		Status:         "active",
@@ -169,7 +166,6 @@ func (s *MemoryStore) CreateTeamSetup(_ context.Context, request domain.TeamSetu
 			id:           fmt.Sprintf("scope_%d", idx+1),
 			name:         scope.Name,
 			envFiles:     append([]string(nil), scope.EnvFiles...),
-			roleAccess:   copyStringMap(scope.DefaultRoleAccess),
 			memberAccess: map[string]string{},
 			envelopes:    map[string]domain.ScopeKeyEnvelope{},
 			variables:    map[string]*memoryVariable{},
@@ -649,7 +645,6 @@ func (s *MemoryStore) TeamStatus(_ context.Context, teamID string, actor domain.
 				PublicKeySHA:        member.PublicKeySHA,
 				SigningPublicKey:    member.SigningPublicKey,
 				EncryptionPublicKey: member.EncryptionPublicKey,
-				RequestedRole:       member.Role,
 				RequestedManagement: member.Management,
 			})
 		}
@@ -702,13 +697,10 @@ func effectivePermission(scope *memoryScope, actor domain.Member) string {
 	if permission := scope.memberAccess[actor.PublicKeySHA]; permission != "" {
 		return permission
 	}
-	if actor.Role == "admins" {
-		if permission := scope.roleAccess["admins"]; permission != "" {
-			return permission
-		}
+	if actor.Management {
 		return "admin"
 	}
-	return scope.roleAccess[actor.Role]
+	return ""
 }
 
 func applySnapshot(team *memoryTeam, raw json.RawMessage) {
@@ -721,13 +713,11 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 			PublicKeySHA        string            `json:"public_key_sha"`
 			SigningPublicKey    string            `json:"signing_public_key"`
 			EncryptionPublicKey string            `json:"encryption_public_key"`
-			Role                string            `json:"role"`
 			Management          bool              `json:"management"`
 			Scopes              map[string]string `json:"scopes"`
 		} `json:"members"`
 		Scopes map[string]struct {
-			EnvFiles          []string          `json:"env_files"`
-			DefaultRoleAccess map[string]string `json:"default_role_access"`
+			EnvFiles []string `json:"env_files"`
 		} `json:"scopes"`
 	}
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
@@ -740,11 +730,6 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 		if member.PublicKeySHA == "" {
 			continue
 		}
-		role := member.Role
-		if role == "" {
-			role = "developers"
-		}
-		management := member.Management || role == "admins"
 		team.members[member.PublicKeySHA] = domain.Member{
 			PublicIdentity: domain.PublicIdentity{
 				Handle:              member.Handle,
@@ -752,8 +737,7 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 				SigningPublicKey:    member.SigningPublicKey,
 				EncryptionPublicKey: member.EncryptionPublicKey,
 			},
-			Role:       role,
-			Management: management,
+			Management: member.Management,
 			Scopes:     copyStringMap(member.Scopes),
 			Status:     "active",
 		}
@@ -767,7 +751,6 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 			scope = &memoryScope{
 				id:           fmt.Sprintf("scope_%d", len(team.scopes)+1),
 				name:         name,
-				roleAccess:   map[string]string{},
 				memberAccess: map[string]string{},
 				envelopes:    map[string]domain.ScopeKeyEnvelope{},
 				variables:    map[string]*memoryVariable{},
@@ -775,7 +758,6 @@ func applySnapshot(team *memoryTeam, raw json.RawMessage) {
 			team.scopes[name] = scope
 		}
 		scope.envFiles = append([]string(nil), scopeSnapshot.EnvFiles...)
-		scope.roleAccess = copyStringMap(scopeSnapshot.DefaultRoleAccess)
 	}
 	for _, member := range team.members {
 		for scopeName, permission := range member.Scopes {
@@ -886,10 +868,6 @@ func randomInviteID() (string, error) {
 }
 
 func (s *MemoryStore) CreateTeamInvite(_ context.Context, teamID string, actor domain.Member, request domain.CreateTeamInviteRequest) (domain.CreateTeamInviteResult, error) {
-	role := strings.TrimSpace(request.RequestedRole)
-	if role == "" {
-		role = "developers"
-	}
 	scopes := copyStringMap(request.RequestedScopes)
 
 	s.mu.Lock()
@@ -924,8 +902,7 @@ func (s *MemoryStore) CreateTeamInvite(_ context.Context, teamID string, actor d
 		label:               strings.TrimSpace(request.Label),
 		pinVerifier:         hash,
 		status:              "active",
-		requestedRole:       role,
-		requestedManagement: request.RequestedManagement || role == "admins",
+		requestedManagement: request.RequestedManagement,
 		requestedScopes:     scopes,
 		scopeKeyBundle:      request.ScopeKeyBundle,
 		createdBy:           actor.PublicKeySHA,
@@ -1015,13 +992,8 @@ func (s *MemoryStore) SubmitInvitePIN(_ context.Context, teamID string, inviteID
 		preApproved := len(envelopes) > 0
 		var member *domain.Member
 		if preApproved {
-			role := inv.requestedRole
-			if role == "" {
-				role = "developers"
-			}
 			newMember := domain.Member{
 				PublicIdentity: request.Joiner,
-				Role:           role,
 				Management:     inv.requestedManagement,
 				Scopes:         copyStringMap(inv.requestedScopes),
 				Status:         "active",
@@ -1143,14 +1115,9 @@ func (s *MemoryStore) CreateJoinRequest(_ context.Context, teamID string, reques
 	if _, exists := team.members[request.Joiner.PublicKeySHA]; exists {
 		return ErrJoinRequestDuplicate
 	}
-	role := request.RequestedRole
-	if role == "" {
-		role = "developers"
-	}
 	team.members[request.Joiner.PublicKeySHA] = domain.Member{
 		PublicIdentity: request.Joiner,
-		Role:           role,
-		Management:     false,
+		Management:     request.RequestedManagement,
 		Status:         "pending",
 	}
 	return nil
@@ -1177,7 +1144,6 @@ func (s *MemoryStore) ListPendingJoinRequests(_ context.Context, teamID string, 
 			PublicKeySHA:        member.PublicKeySHA,
 			SigningPublicKey:    member.SigningPublicKey,
 			EncryptionPublicKey: member.EncryptionPublicKey,
-			RequestedRole:       member.Role,
 			RequestedManagement: member.Management,
 		})
 	}
@@ -1203,11 +1169,6 @@ func (s *MemoryStore) ApproveJoinRequest(_ context.Context, teamID string, publi
 		return domain.ApproveJoinResult{}, ErrJoinRequestNotFound
 	}
 
-	role := request.GrantedRole
-	if role == "" {
-		role = "developers"
-	}
-	member.Role = role
 	member.Management = request.GrantedManagement
 	member.Status = "active"
 	member.Scopes = copyStringMap(request.GrantedScopes)

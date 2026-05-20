@@ -57,10 +57,9 @@ type TeamSetupRequest struct {
 }
 
 type SetupScope struct {
-	Name              string                `json:"name"`
-	EnvFiles          []string              `json:"env_files,omitempty"`
-	Variables         []VariableDeclaration `json:"variables,omitempty"`
-	DefaultRoleAccess map[string]string     `json:"default_role_access,omitempty"`
+	Name      string                `json:"name"`
+	EnvFiles  []string              `json:"env_files,omitempty"`
+	Variables []VariableDeclaration `json:"variables,omitempty"`
 }
 
 type VariableDeclaration struct {
@@ -338,7 +337,6 @@ type PublicIdentity struct {
 
 type Member struct {
 	PublicIdentity
-	Role       string            `json:"role,omitempty"`
 	Management bool              `json:"management,omitempty"`
 	Scopes     map[string]string `json:"scopes,omitempty"`
 	Status     string            `json:"status"`
@@ -366,7 +364,6 @@ type JoinRequestRow struct {
 	PublicKeySHA        string            `json:"public_key_sha"`
 	SigningPublicKey    string            `json:"signing_public_key"`
 	EncryptionPublicKey string            `json:"encryption_public_key"`
-	RequestedRole       string            `json:"requested_role,omitempty"`
 	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
 	CreatedAt           string            `json:"created_at,omitempty"`
@@ -379,7 +376,6 @@ type PendingJoinRequestsData struct {
 type JoinRequestSubmission struct {
 	OperationID         string            `json:"operation_id"`
 	Joiner              PublicIdentity    `json:"joiner"`
-	RequestedRole       string            `json:"requested_role,omitempty"`
 	RequestedManagement bool              `json:"requested_management,omitempty"`
 	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
 	Client              ClientMetadata    `json:"client,omitempty"`
@@ -388,7 +384,6 @@ type JoinRequestSubmission struct {
 type ApproveJoinRequestBody struct {
 	OperationID       string             `json:"operation_id"`
 	ScopeKeyEnvelopes []ScopeKeyEnvelope `json:"scope_key_envelopes"`
-	GrantedRole       string             `json:"granted_role,omitempty"`
 	GrantedManagement bool               `json:"granted_management,omitempty"`
 	GrantedScopes     map[string]string  `json:"granted_scopes,omitempty"`
 	Client            ClientMetadata     `json:"client,omitempty"`

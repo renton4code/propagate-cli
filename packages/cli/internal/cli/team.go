@@ -264,8 +264,8 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 			PublicKeySHA:        summary.PublicKeySHA,
 			SigningPublicKey:    summary.SigningPublicKey,
 			EncryptionPublicKey: summary.EncryptionPublicKey,
-			Management:         opts.RequestedManagement,
-			Scopes:             requestedScopes,
+			Management:          opts.RequestedManagement,
+			Scopes:              requestedScopes,
 		}
 		nextConfig, err := config.RenderWithApprovedMember(project, member)
 		if err != nil {
@@ -321,7 +321,6 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 			SigningPublicKey:    summary.SigningPublicKey,
 			EncryptionPublicKey: summary.EncryptionPublicKey,
 		},
-		RequestedRole:       joinRequestedRole(opts.RequestedManagement),
 		RequestedManagement: opts.RequestedManagement,
 		RequestedScopes:     requestedScopes,
 		Client:              apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "propagate-cli"},
@@ -382,6 +381,10 @@ func (s scopeFlags) Map() (map[string]string, error) {
 }
 
 func renderTeamJoinResult(w io.Writer, jsonOutput bool, noColor bool, result TeamJoinResult) {
+	renderTeamJoinResultWithTitle(w, jsonOutput, noColor, result, "Joining team")
+}
+
+func renderTeamJoinResultWithTitle(w io.Writer, jsonOutput bool, noColor bool, result TeamJoinResult, title string) {
 	if jsonOutput {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -390,7 +393,7 @@ func renderTeamJoinResult(w io.Writer, jsonOutput bool, noColor bool, result Tea
 	}
 
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate team join", result.DryRun)
+	renderCommandTitle(w, style, title, result.DryRun)
 	if result.InitIncluded {
 		renderOK(w, style, "Init completed before join.")
 		renderTeamJoinInitSummary(w, style, result.Init)
@@ -471,13 +474,6 @@ func sortedScopeNames(scopes map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func joinRequestedRole(management bool) string {
-	if management {
-		return "admins"
-	}
-	return "developers"
 }
 
 func printTeamHelp(w io.Writer) {

@@ -655,7 +655,6 @@ func cloneParsedProjectForConfigEdit(project config.ParsedProject) config.Parsed
 		copied := scope
 		copied.EnvFiles = append([]string(nil), scope.EnvFiles...)
 		copied.Variables = append([]config.VariableDeclaration(nil), scope.Variables...)
-		copied.DefaultRoleAccess = copyConfigEditStringMap(scope.DefaultRoleAccess)
 		out.Scopes[idx] = copied
 	}
 	out.Members = make([]config.Member, len(project.Members))
@@ -707,7 +706,7 @@ func renderConfigEditResult(w io.Writer, jsonOutput bool, noColor bool, result C
 		return
 	}
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate config edit", result.DryRun)
+	renderCommandTitle(w, style, "Config edit", result.DryRun)
 	switch result.Status {
 	case "dry_run":
 		renderNote(w, style, "Config edit dry run complete.")

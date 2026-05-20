@@ -29,7 +29,6 @@ type TeamStatusResult struct {
 	TeamID                    string                  `json:"team_id"`
 	TeamName                  string                  `json:"team_name"`
 	Identity                  *TeamStatusIdentity     `json:"identity,omitempty"`
-	CurrentRole               string                  `json:"current_role,omitempty"`
 	CurrentManagement         bool                    `json:"current_management,omitempty"`
 	CurrentScopes             map[string]string       `json:"current_scopes,omitempty"`
 	LocalRevision             string                  `json:"local_revision,omitempty"`
@@ -55,7 +54,6 @@ type TeamStatusIdentity struct {
 type TeamMember struct {
 	Handle       string            `json:"handle,omitempty"`
 	PublicKeySHA string            `json:"public_key_sha"`
-	Role         string            `json:"role,omitempty"`
 	Management   bool              `json:"management,omitempty"`
 	Scopes       map[string]string `json:"scopes,omitempty"`
 	Status       string            `json:"status,omitempty"`
@@ -153,7 +151,6 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	result.Identity = &statusIdentity
 	if member := localMember(project, summary.PublicKeySHA); member != nil {
 		normalized := config.NormalizeMemberAccess(*member, project.Scopes)
-		result.CurrentRole = teamAccessGroup(normalized.Role, normalized.Management)
 		result.CurrentManagement = normalized.Management
 		result.CurrentScopes = copyStringMap(normalized.Scopes)
 	}
@@ -197,8 +194,7 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	result.CloudRevision = status.Team.ConfigRevision
 	result.CloudConfigHash = status.Team.ConfigHash
 	if status.Actor.PublicKeySHA != "" {
-		result.CurrentRole = teamAccessGroup(status.Actor.Role, status.Actor.Management)
-		result.CurrentManagement = status.Actor.Management || status.Actor.Role == "admins"
+		result.CurrentManagement = status.Actor.Management
 		result.CurrentScopes = copyStringMap(status.Actor.Scopes)
 	}
 	if len(status.Members) > 0 {
@@ -227,11 +223,10 @@ func teamMembersFromLocal(members []config.Member) map[string][]TeamMember {
 	out := map[string][]TeamMember{}
 	for _, member := range members {
 		member = config.NormalizeMemberAccess(member, nil)
-		role := teamAccessGroup(member.Role, member.Management)
-		out[role] = append(out[role], TeamMember{
+		group := managementGroup(member.Management)
+		out[group] = append(out[group], TeamMember{
 			Handle:       member.Handle,
 			PublicKeySHA: member.PublicKeySHA,
-			Role:         role,
 			Management:   member.Management,
 			Scopes:       copyStringMap(member.Scopes),
 			Status:       "active",
@@ -243,22 +238,17 @@ func teamMembersFromLocal(members []config.Member) map[string][]TeamMember {
 
 func teamMembersFromCloud(members map[string][]apiclient.Member) map[string][]TeamMember {
 	out := map[string][]TeamMember{}
-	for role, items := range members {
+	for _, items := range members {
 		for _, item := range items {
-			memberRole := strings.TrimSpace(item.Role)
-			if memberRole == "" {
-				memberRole = role
-			}
-			memberRole = teamAccessGroup(memberRole, item.Management)
+			group := managementGroup(item.Management)
 			status := strings.TrimSpace(item.Status)
 			if status == "" {
 				status = "active"
 			}
-			out[memberRole] = append(out[memberRole], TeamMember{
+			out[group] = append(out[group], TeamMember{
 				Handle:       item.Handle,
 				PublicKeySHA: item.PublicKeySHA,
-				Role:         memberRole,
-				Management:   item.Management || item.Role == "admins",
+				Management:   item.Management,
 				Scopes:       copyStringMap(item.Scopes),
 				Status:       status,
 			})
@@ -278,8 +268,7 @@ func teamMemberListFromCloud(members []apiclient.Member) []TeamMember {
 		out = append(out, TeamMember{
 			Handle:       item.Handle,
 			PublicKeySHA: item.PublicKeySHA,
-			Role:         teamAccessGroup(item.Role, item.Management),
-			Management:   item.Management || item.Role == "admins",
+			Management:   item.Management,
 			Scopes:       copyStringMap(item.Scopes),
 			Status:       status,
 		})
@@ -340,15 +329,9 @@ func localMember(project config.ParsedProject, publicKeySHA string) *config.Memb
 	return nil
 }
 
-func teamAccessGroup(role string, management bool) string {
-	if management || role == "admins" {
+func managementGroup(management bool) string {
+	if management {
 		return "management"
-	}
-	if strings.TrimSpace(role) == "developers" {
-		return "members"
-	}
-	if strings.TrimSpace(role) != "" {
-		return strings.TrimSpace(role)
 	}
 	return "members"
 }
@@ -428,7 +411,7 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, noColor bool, result T
 	}
 
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate team status", false)
+	renderCommandTitle(w, style, "Team status", false)
 	switch result.Status {
 	case "cloud_unavailable":
 		renderWarning(w, style, "Team local status available; cloud activity unavailable.")
@@ -446,8 +429,8 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, noColor bool, result T
 	if result.Identity != nil {
 		fmt.Fprintf(w, "Checked by: %s (%s)\n", result.Identity.Handle, result.Identity.PublicKeySHA)
 	}
-	if result.CurrentRole != "" {
-		fmt.Fprintf(w, "Current access: %s\n", result.CurrentRole)
+	if result.CurrentManagement {
+		fmt.Fprintf(w, "Current access: management\n")
 	}
 	fmt.Fprintf(w, "Local revision: %s\n", valueOrDash(result.LocalRevision))
 	fmt.Fprintf(w, "Cloud revision: %s\n", valueOrDash(result.CloudRevision))

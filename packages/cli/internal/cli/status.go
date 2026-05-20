@@ -176,7 +176,7 @@ func renderStatusResult(w io.Writer, jsonOutput bool, noColor bool, result Statu
 	}
 
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Propagate status", false)
+	renderCommandTitle(w, style, "Status", false)
 	switch {
 	case result.OK:
 		renderOK(w, style, "Unified status complete.")

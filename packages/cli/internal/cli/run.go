@@ -50,6 +50,8 @@ func Run(args []string, streams Streams) int {
 		return ExitSuccess
 	}
 	switch rest[0] {
+	case "quickstart":
+		return runQuickstartCommand(rest[1:], global, streams)
 	case "init":
 		return runInitCommand(rest[1:], global, streams)
 	case "status":
@@ -116,6 +118,7 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "Propagate CLI")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  propagate quickstart [flags]")
 	fmt.Fprintln(w, "  propagate init [flags]")
 	fmt.Fprintln(w, "  propagate status [flags]")
 	fmt.Fprintln(w, "  propagate run [flags] -- COMMAND [args...]")
@@ -138,6 +141,7 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "  --api-url VALUE     override Propagate API URL")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  quickstart  guided setup, invite, or join for the current project")
 	fmt.Fprintln(w, "  init      create or load local identity and initialize project metadata")
 	fmt.Fprintln(w, "  status    show config, team, and env status together")
 	fmt.Fprintln(w, "  run       inject decrypted env values into a child process")

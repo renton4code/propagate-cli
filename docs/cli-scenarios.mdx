@@ -21,6 +21,32 @@ Use `propagate config status`, `propagate team status`, or `propagate env status
 
 If the cloud cannot be reached, pass `--api-url VALUE` or configure it outside docs and prompts.
 
+## Quickstart A New Team Project
+
+Use `quickstart` when a management member wants to set up a new project and create one developer invite in the same run:
+
+```bash
+propagate quickstart --handle <handle> --team-name <team-name> --invite-label <developer-label> --scope dev=read --skip-agent-guidance --dry-run --json --non-interactive
+```
+
+After reviewing the setup and invite preview:
+
+```bash
+propagate quickstart --handle <handle> --team-name <team-name> --invite-label <developer-label> --scope dev=read --skip-agent-guidance --yes --non-interactive
+```
+
+Share the printed PIN through a trusted channel. The separate `propagate init` and `propagate team invite` commands remain available when setup and invitation should happen as separate reviewed steps.
+
+In interactive mode, omit `--scope` to choose developer invite scopes in the prompt. In non-interactive mode, omitted invite scope defaults to `dev=read` when a `dev` scope exists.
+
+If `propagate.yaml` already exists, `quickstart` switches to the developer onboarding flow and behaves like `propagate team join --init`:
+
+```bash
+propagate quickstart --handle <handle>
+```
+
+Interactive mode can prompt for the missing handle, agent guidance decision, join mode, invite selection, and PIN. Non-interactive runs should pass the same join flags they would pass to `propagate team join --init`, such as `--join-mode request` or `--join-mode invite --invite-id <id> --pin <pin>`.
+
 ## Initialize A New Team Project
 
 Preview setup first:

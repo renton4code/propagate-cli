@@ -116,7 +116,6 @@ func TestConfigPullUpdatesLocalConfigFromCloud(t *testing.T) {
 		PublicKeySHA:        bobIdent.PublicKeySHA,
 		SigningPublicKey:    bobIdent.SigningPublicKey,
 		EncryptionPublicKey: bobIdent.EncryptionPublicKey,
-		Role:                "developers",
 	}
 
 	cloudProject := localProject
@@ -235,7 +234,6 @@ func TestConfigStatusReportsLocalAhead(t *testing.T) {
 		PublicKeySHA:        bobIdent.PublicKeySHA,
 		SigningPublicKey:    bobIdent.SigningPublicKey,
 		EncryptionPublicKey: bobIdent.EncryptionPublicKey,
-		Role:                "developers",
 	})
 	rendered, err := config.RenderParsed(localProject)
 	if err != nil {
@@ -520,9 +518,8 @@ func writeConfigEditFixture(t *testing.T, repo string) {
 		},
 	}
 	project.Scopes = append(project.Scopes, config.ScopeSummary{
-		Name:              "prod",
-		EnvFiles:          []string{".env.prod"},
-		DefaultRoleAccess: map[string]string{"admins": "write"},
+		Name:     "prod",
+		EnvFiles: []string{".env.prod"},
 	})
 	rendered, err := config.RenderParsed(project)
 	if err != nil {

@@ -16,9 +16,8 @@ import (
 )
 
 type snapshotScope struct {
-	EnvFiles          []string              `json:"env_files"`
-	Variables         []VariableDeclaration `json:"variables,omitempty"`
-	DefaultRoleAccess map[string]string     `json:"default_role_access,omitempty"`
+	EnvFiles  []string              `json:"env_files"`
+	Variables []VariableDeclaration `json:"variables,omitempty"`
 }
 
 type snapshotTeam struct {
@@ -90,20 +89,10 @@ func ParseSnapshot(raw json.RawMessage, cloudRevision string) (ParsedProject, er
 				return ParsedProject{}, fmt.Errorf("scope %s variable %d: %w", name, idx+1, err)
 			}
 		}
-		access := copyStringMap(scope.DefaultRoleAccess)
-		for role, permission := range access {
-			if err := ValidateRole(role); err != nil {
-				return ParsedProject{}, fmt.Errorf("scope %s: %w", name, err)
-			}
-			if err := ValidatePermission(permission); err != nil {
-				return ParsedProject{}, fmt.Errorf("scope %s: %w", name, err)
-			}
-		}
 		project.Scopes = append(project.Scopes, ScopeSummary{
-			Name:              name,
-			EnvFiles:          files,
-			Variables:         variables,
-			DefaultRoleAccess: access,
+			Name:      name,
+			EnvFiles:  files,
+			Variables: variables,
 		})
 	}
 
