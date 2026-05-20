@@ -26,31 +26,42 @@ import (
 
 type configPushOptions struct {
 	globalOptions
-	DryRun bool
-	Yes    bool
+	DryRun       bool
+	Yes          bool
+	ApproveJoins multiFlag
+	DeclineJoins multiFlag
+	SkipJoins    multiFlag
 }
 
 var configPushHTTPClient *http.Client
 
 type ConfigPushResult struct {
-	OK                     bool              `json:"ok"`
-	Command                string            `json:"command"`
-	Status                 string            `json:"status"`
-	DryRun                 bool              `json:"dry_run"`
-	OperationID            string            `json:"operation_id,omitempty"`
-	ProjectConfigPath      string            `json:"project_config_path"`
-	TeamID                 string            `json:"team_id"`
-	TeamName               string            `json:"team_name"`
-	Identity               *identity.Summary `json:"identity,omitempty"`
-	OldRevision            string            `json:"old_revision,omitempty"`
-	NewRevision            string            `json:"new_revision,omitempty"`
-	LocalConfigHash        string            `json:"local_config_hash,omitempty"`
-	CloudConfigHash        string            `json:"cloud_config_hash,omitempty"`
-	EnvelopesUploadedCount int               `json:"envelopes_uploaded_count"`
-	ConfigModified         bool              `json:"config_modified"`
-	BackendStatus          string            `json:"backend_status"`
-	Warnings               []string          `json:"warnings,omitempty"`
-	NextSteps              []string          `json:"next_steps,omitempty"`
+	OK                     bool                `json:"ok"`
+	Command                string              `json:"command"`
+	Status                 string              `json:"status"`
+	DryRun                 bool                `json:"dry_run"`
+	OperationID            string              `json:"operation_id,omitempty"`
+	ProjectConfigPath      string              `json:"project_config_path"`
+	TeamID                 string              `json:"team_id"`
+	TeamName               string              `json:"team_name"`
+	Identity               *identity.Summary   `json:"identity,omitempty"`
+	OldRevision            string              `json:"old_revision,omitempty"`
+	NewRevision            string              `json:"new_revision,omitempty"`
+	LocalConfigHash        string              `json:"local_config_hash,omitempty"`
+	CloudConfigHash        string              `json:"cloud_config_hash,omitempty"`
+	EnvelopesUploadedCount int                 `json:"envelopes_uploaded_count"`
+	ApprovedJoins          []JoinDecisionEntry `json:"approved_joins,omitempty"`
+	DeclinedJoins          []JoinDecisionEntry `json:"declined_joins,omitempty"`
+	SkippedJoins           []JoinDecisionEntry `json:"skipped_joins,omitempty"`
+	ConfigModified         bool                `json:"config_modified"`
+	BackendStatus          string              `json:"backend_status"`
+	Warnings               []string            `json:"warnings,omitempty"`
+	NextSteps              []string            `json:"next_steps,omitempty"`
+}
+
+type JoinDecisionEntry struct {
+	PublicKeySHA string `json:"public_key_sha"`
+	Decision     string `json:"decision"`
 }
 
 
@@ -84,6 +95,9 @@ func runConfigPushCommand(args []string, global globalOptions, streams Streams) 
 	addGlobalFlags(fs, &opts.globalOptions)
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate and summarize without uploading or writing propagate.yaml")
 	fs.BoolVar(&opts.Yes, "yes", false, "confirm the config push")
+	fs.Var(&opts.ApproveJoins, "approve-join", "approve a pending join request (public_key_sha)")
+	fs.Var(&opts.DeclineJoins, "decline-join", "decline a pending join request (public_key_sha)")
+	fs.Var(&opts.SkipJoins, "skip-join", "skip a pending join request (public_key_sha)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -179,7 +193,8 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 		return ConfigPushResult{}, commandError(ExitConflict, "revision_conflict", "Local config is not based on the current cloud revision", nil, "Run `propagate config pull`, review the diff, and retry config push.")
 	}
 
-	if status.State == "equal" {
+	hasJoinDecisions := len(opts.ApproveJoins) > 0 || len(opts.DeclineJoins) > 0 || len(opts.SkipJoins) > 0
+	if status.State == "equal" && !hasJoinDecisions {
 		result.Status = "no_change"
 		result.BackendStatus = "equal"
 		result.NextSteps = []string{"No config push is needed."}
@@ -187,6 +202,64 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 	}
 
 	var targetEnvelopes []apiclient.ScopeKeyEnvelope
+	var decisions apiclient.ConfigDecisions
+
+	if len(opts.ApproveJoins) > 0 || len(opts.DeclineJoins) > 0 || len(opts.SkipJoins) > 0 {
+		pendingData, pErr := client.ListPendingJoinRequests(context.Background(), ident, project.TeamID)
+		if pErr != nil {
+			return ConfigPushResult{}, mapAPIError(pErr, "Cannot list pending join requests")
+		}
+		pendingByKey := map[string]apiclient.JoinRequestRow{}
+		for _, req := range pendingData.Requests {
+			pendingByKey[req.PublicKeySHA] = req
+		}
+		for _, sha := range opts.ApproveJoins {
+			joiner, found := pendingByKey[sha]
+			if !found {
+				return ConfigPushResult{}, commandError(ExitValidationError, "join_request_not_found", fmt.Sprintf("No pending join request found for %s", sha), nil)
+			}
+			project.Members = append(project.Members, config.Member{
+				Handle:              joiner.Handle,
+				PublicKeySHA:        joiner.PublicKeySHA,
+				SigningPublicKey:    joiner.SigningPublicKey,
+				EncryptionPublicKey: joiner.EncryptionPublicKey,
+				Management:          joiner.RequestedManagement,
+				Scopes:              joiner.RequestedScopes,
+			})
+			envelopes, bErr := buildEnvelopesForJoiner(context.Background(), client, ident, project, joiner)
+			if bErr != nil {
+				return ConfigPushResult{}, bErr
+			}
+			targetEnvelopes = append(targetEnvelopes, envelopes...)
+			for scope, perm := range joiner.RequestedScopes {
+				decisions.Approved = append(decisions.Approved, apiclient.ConfigDecision{
+					Type:         "scope_access_change",
+					PublicKeySHA: sha,
+					Scope:        scope,
+					Permission:   perm,
+				})
+			}
+			result.ApprovedJoins = append(result.ApprovedJoins, JoinDecisionEntry{PublicKeySHA: sha, Decision: "approved"})
+		}
+		for _, sha := range opts.DeclineJoins {
+			if _, found := pendingByKey[sha]; !found {
+				return ConfigPushResult{}, commandError(ExitValidationError, "join_request_not_found", fmt.Sprintf("No pending join request found for %s", sha), nil)
+			}
+			decisions.Declined = append(decisions.Declined, apiclient.ConfigDecision{
+				Type:         "join",
+				PublicKeySHA: sha,
+			})
+			result.DeclinedJoins = append(result.DeclinedJoins, JoinDecisionEntry{PublicKeySHA: sha, Decision: "declined"})
+		}
+		for _, sha := range opts.SkipJoins {
+			decisions.Skipped = append(decisions.Skipped, apiclient.ConfigDecision{
+				Type:         "join",
+				PublicKeySHA: sha,
+			})
+			result.SkippedJoins = append(result.SkippedJoins, JoinDecisionEntry{PublicKeySHA: sha, Decision: "skipped"})
+		}
+	}
+
 	newScopeEnvelopes, err := buildNewScopeEnvelopesIfNeeded(context.Background(), client, ident, project, project, status)
 	if err != nil {
 		return ConfigPushResult{}, err
@@ -228,6 +301,7 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 		OperationID:            opID,
 		ExpectedConfigRevision: project.CloudRevision,
 		TargetConfigSnapshot:   json.RawMessage(snapshot),
+		Decisions:              decisions,
 		ScopeKeyEnvelopes:      targetEnvelopes,
 		Client:                 apiclient.ClientMetadata{CLIVersion: Version, ClientKind: "cli"},
 	})

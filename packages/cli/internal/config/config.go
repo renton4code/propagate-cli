@@ -464,6 +464,8 @@ func ReadProject(path string) (ParsedProject, error) {
 			}
 		case "pending":
 			// Legacy section — ignored.
+		case "invite":
+			// Ignored — invite metadata is not stored in the config.
 		}
 	}
 
@@ -649,6 +651,7 @@ func RenderParsed(project ParsedProject) (string, error) {
 			}
 		}
 	}
+
 	b.WriteString("\n")
 	return b.String(), nil
 }

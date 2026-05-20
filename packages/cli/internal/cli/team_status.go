@@ -37,6 +37,8 @@ type TeamStatusResult struct {
 	CloudConfigHash           string                  `json:"cloud_config_hash,omitempty"`
 	Members                   map[string][]TeamMember `json:"members,omitempty"`
 	MembersCount              int                     `json:"members_count"`
+	PendingJoins              []TeamPendingJoin       `json:"pending_joins,omitempty"`
+	PendingJoinsCount         int                     `json:"pending_joins_count"`
 	PendingOrRecentAccess     json.RawMessage         `json:"pending_or_recent_access,omitempty"`
 	LastPulls                 []TeamPullActivity      `json:"last_pulls,omitempty"`
 	NeverPulled               []TeamMember            `json:"never_pulled,omitempty"`
@@ -44,6 +46,13 @@ type TeamStatusResult struct {
 	BackendStatus             string                  `json:"backend_status"`
 	Warnings                  []string                `json:"warnings,omitempty"`
 	NextSteps                 []string                `json:"next_steps,omitempty"`
+}
+
+type TeamPendingJoin struct {
+	Handle              string            `json:"handle,omitempty"`
+	PublicKeySHA        string            `json:"public_key_sha"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
 }
 
 type TeamStatusIdentity struct {
@@ -201,6 +210,8 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 		result.Members = teamMembersFromCloud(status.Members)
 		result.MembersCount = countTeamMembers(result.Members)
 	}
+	result.PendingJoins = teamPendingJoinsFromCloud(status.PendingJoinRequests)
+	result.PendingJoinsCount = len(result.PendingJoins)
 	result.PendingOrRecentAccess = normalizeRawJSON(status.PendingOrRecentAccess)
 	result.LastPulls = teamPullsFromCloud(status.LastPulls)
 	result.NeverPulled = teamMemberListFromCloud(status.NeverPulled)
@@ -276,6 +287,19 @@ func teamMemberListFromCloud(members []apiclient.Member) []TeamMember {
 	sort.Slice(out, func(i, j int) bool {
 		return teamMemberSortKey(out[i]) < teamMemberSortKey(out[j])
 	})
+	return out
+}
+
+func teamPendingJoinsFromCloud(joins []apiclient.JoinRequestRow) []TeamPendingJoin {
+	out := make([]TeamPendingJoin, 0, len(joins))
+	for _, j := range joins {
+		out = append(out, TeamPendingJoin{
+			Handle:              j.Handle,
+			PublicKeySHA:        j.PublicKeySHA,
+			RequestedManagement: j.RequestedManagement,
+			RequestedScopes:     j.RequestedScopes,
+		})
+	}
 	return out
 }
 

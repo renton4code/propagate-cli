@@ -114,6 +114,14 @@ func addGlobalFlags(fs *flag.FlagSet, opts *globalOptions) {
 	fs.StringVar(&opts.APIURL, "api-url", opts.APIURL, "override Propagate API URL")
 }
 
+type multiFlag []string
+
+func (m *multiFlag) String() string { return fmt.Sprintf("%v", *m) }
+func (m *multiFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
 func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "Propagate CLI")
 	fmt.Fprintln(w)

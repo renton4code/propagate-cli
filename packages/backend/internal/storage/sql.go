@@ -463,6 +463,9 @@ func (s *SQLStore) PushConfig(ctx context.Context, teamID string, actor domain.M
 	if err := applyApprovedAccessDecisionsSQL(ctx, tx, teamID, newRevision, request.Decisions.Approved); err != nil {
 		return domain.ConfigPushResult{}, err
 	}
+	if err := applyDeclinedDecisionsSQL(ctx, tx, teamID, actor, request.Decisions.Declined); err != nil {
+		return domain.ConfigPushResult{}, err
+	}
 	for _, envelope := range request.ScopeKeyEnvelopes {
 		scopeID, err := scopeID(ctx, tx, teamID, envelope.Scope)
 		if err != nil {
@@ -928,6 +931,22 @@ func applyApprovedAccessDecisionsSQL(ctx context.Context, tx *sql.Tx, teamID str
 			)
 			values ($1, $2, 'member', $3, $4, $5, true)
 		`, teamID, sid, decision.PublicKeySHA, decision.Permission, revision); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyDeclinedDecisionsSQL(ctx context.Context, tx *sql.Tx, teamID string, actor domain.Member, decisions []domain.ConfigDecision) error {
+	for _, decision := range decisions {
+		if decision.PublicKeySHA == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			update members
+			set status = 'declined', declined_by_key_sha = $3, declined_at = now()
+			where team_id = $1 and public_key_sha = $2 and status = 'pending'
+		`, teamID, decision.PublicKeySHA, actor.PublicKeySHA); err != nil {
 			return err
 		}
 	}

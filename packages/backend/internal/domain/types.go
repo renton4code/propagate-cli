@@ -757,16 +757,11 @@ func CanonicalSetupConfigSnapshot(request TeamSetupRequest, teamID string) (json
 		Management          bool              `json:"management,omitempty"`
 		Scopes              map[string]string `json:"scopes,omitempty"`
 	}
-	type canonicalPending struct {
-		Joins         []any `json:"joins"`
-		AccessChanges []any `json:"access_changes"`
-	}
 	type canonicalSnapshot struct {
 		Version int                       `json:"version"`
 		Team    canonicalTeam             `json:"team"`
 		Scopes  map[string]canonicalScope `json:"scopes"`
 		Members []canonicalMember         `json:"members"`
-		Pending canonicalPending          `json:"pending"`
 	}
 
 	scopes := map[string]canonicalScope{}
@@ -793,10 +788,6 @@ func CanonicalSetupConfigSnapshot(request TeamSetupRequest, teamID string) (json
 			Management:          true,
 			Scopes:              adminScopes,
 		}},
-		Pending: canonicalPending{
-			Joins:         []any{},
-			AccessChanges: []any{},
-		},
 	}
 	payload, err := json.Marshal(snapshot)
 	if err != nil {

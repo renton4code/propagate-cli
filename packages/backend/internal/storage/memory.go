@@ -342,6 +342,7 @@ func (s *MemoryStore) PushConfig(_ context.Context, teamID string, actor domain.
 
 	applySnapshot(team, request.TargetConfigSnapshot)
 	applyApprovedAccessDecisions(team, request.Decisions.Approved)
+	applyDeclinedDecisions(team, actor, request.Decisions.Declined)
 	for _, envelope := range request.ScopeKeyEnvelopes {
 		scope := team.scopes[envelope.Scope]
 		if scope == nil {
@@ -788,6 +789,20 @@ func applyApprovedAccessDecisions(team *memoryTeam, decisions []domain.ConfigDec
 			member.Scopes[decision.Scope] = decision.Permission
 			team.members[decision.PublicKeySHA] = member
 		}
+	}
+}
+
+func applyDeclinedDecisions(team *memoryTeam, actor domain.Member, decisions []domain.ConfigDecision) {
+	for _, decision := range decisions {
+		if decision.PublicKeySHA == "" {
+			continue
+		}
+		member, ok := team.members[decision.PublicKeySHA]
+		if !ok || member.Status != "pending" {
+			continue
+		}
+		member.Status = "declined"
+		team.members[decision.PublicKeySHA] = member
 	}
 }
 
