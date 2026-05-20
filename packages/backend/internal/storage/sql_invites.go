@@ -196,10 +196,64 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 		`, teamID, inviteID, request.Joiner.PublicKeySHA); err != nil {
 			return domain.InvitePINResult{}, err
 		}
+		preApproved := len(envelopes) > 0
+		if preApproved {
+			var reqMgmt bool
+			var reqScopes sql.NullString
+			_ = tx.QueryRowContext(ctx, `
+				select requested_management, requested_scopes
+				from team_invites where team_id = $1 and id = $2
+			`, teamID, inviteID).Scan(&reqMgmt, &reqScopes)
+
+			if _, err := tx.ExecContext(ctx, `
+				insert into members (
+					team_id, handle, public_key_sha, signing_public_key, encryption_public_key,
+					management, status, approved_at
+				)
+				values ($1, $2, $3, $4, $5, $6, 'active', now())
+				on conflict (team_id, public_key_sha) do update set
+					handle = excluded.handle,
+					signing_public_key = excluded.signing_public_key,
+					encryption_public_key = excluded.encryption_public_key,
+					management = excluded.management,
+					status = 'active',
+					approved_at = now()
+			`, teamID, request.Handle, request.Joiner.PublicKeySHA, request.Joiner.SigningPublicKey, request.Joiner.EncryptionPublicKey, reqMgmt); err != nil {
+				return domain.InvitePINResult{}, err
+			}
+
+			if reqScopes.Valid && reqScopes.String != "" {
+				var scopes map[string]string
+				if json.Unmarshal([]byte(reqScopes.String), &scopes) == nil {
+					for scopeName, permission := range scopes {
+						var scopeID int64
+						err := tx.QueryRowContext(ctx, `select id from scopes where team_id = $1 and name = $2`, teamID, scopeName).Scan(&scopeID)
+						if err != nil {
+							continue
+						}
+						_, _ = tx.ExecContext(ctx, `
+							insert into scope_access_rules (team_id, scope_id, subject_type, subject_value, permission, config_revision, active)
+							values ($1, $2, 'member', $3, $4, (select current_config_revision from teams where id = $1), true)
+						`, teamID, scopeID, request.Joiner.PublicKeySHA, permission)
+					}
+				}
+			}
+
+			for _, env := range envelopes {
+				var scopeID int64
+				err := tx.QueryRowContext(ctx, `select id from scopes where team_id = $1 and name = $2`, teamID, env.Scope).Scan(&scopeID)
+				if err != nil {
+					continue
+				}
+				_, _ = tx.ExecContext(ctx, `
+					insert into scope_key_envelopes (team_id, scope_id, recipient_key_sha, scope_key_version, encrypted_scope_key, algorithm, created_by_key_sha, config_revision)
+					values ($1, $2, $3, $4, $5, $6, $3, (select current_config_revision from teams where id = $1))
+				`, teamID, scopeID, env.RecipientKeySHA, env.ScopeKeyVersion, env.EncryptedScopeKey, env.Algorithm)
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return domain.InvitePINResult{}, err
 		}
-		preApproved := len(envelopes) > 0
 		return domain.InvitePINResult{
 			RedemptionID:      redemptionID,
 			InviteID:          inviteID,

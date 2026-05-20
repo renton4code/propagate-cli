@@ -1,13 +1,18 @@
 FROM golang:1.22 AS build
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
+COPY packages/backend/go.mod packages/backend/go.sum ./packages/backend/
+COPY packages/shared/go.mod ./packages/shared/
+WORKDIR /src/packages/backend
+RUN GOWORK=off go mod download
 
-COPY cmd ./cmd
-COPY internal ./internal
+WORKDIR /src
+COPY packages/backend/cmd ./packages/backend/cmd
+COPY packages/backend/internal ./packages/backend/internal
+COPY packages/shared ./packages/shared
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/propagate-api ./cmd/api
+WORKDIR /src/packages/backend
+RUN GOWORK=off CGO_ENABLED=0 GOOS=linux go build -o /out/propagate-api ./cmd/api
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

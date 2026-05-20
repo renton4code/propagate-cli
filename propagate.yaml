@@ -1,0 +1,53 @@
+# Propagate project configuration.
+# This file is safe to commit: it stores metadata and public keys only.
+# Do not add env values, masked values, private keys, tokens, or credentials here.
+version: 1
+team:
+  id: "team_b945a0130d1850aa"
+  name: "dev team"
+  cloud_revision: "rev_00001"
+  sync_status: "synced"
+
+scopes:
+  dev:
+    env_files:
+      - "packages/backend/.env"
+    variables:
+      - name: "PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:3GatuVQ0hBTKEawki7xas9ifaqVIy-EOeUbvNLZKE0w"
+      - name: "PROPAGATE_API_PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:wnIHjcj4PIJrJLWaaTg_C-VjT7eEv6CXHughewuxhbw"
+      - name: "PROPAGATE_API_URL"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:46uzqfKUyqC7b5XvFToJcC2JIu6Dc3xPTr3fuy69H54"
+      - name: "PROPAGATE_DATABASE_URL"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:J3-kygRfNHQwtUvHsTvvWdjOz2ZvsU3rLObZfJ-lrRk"
+      - name: "PROPAGATE_DB_PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:GBPiCmJ_E8zwGN3oHPHMpXtB1PGMYv2ONR1imU_8E24"
+      - name: "SUPABASE_PG_META_CRYPTO_KEY"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:oYmTTswRI3Okf-aH0Kkxr_QoNbKj1nhMFgfvR2Y432Q"
+      - name: "SUPABASE_STUDIO_PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:aOuvx4ZMwLf29T9xQLlBxtK-Q5I4WrrS_arMo6shxXI"
+
+members:
+  - handle: "admin"
+    public_key_sha: "sha256:ffcfc8ba0a5fa2ce93633cc12072a5034c8ba3aff871ec9394072910490fb6ee"
+    signing_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGyYQPNOIrNLz4wOxxN3Q6xMHjOso78LYCIV2STyWERq admin"
+    encryption_public_key: "x25519:znc8RiYzApduTfWUcVvY4xDYLbWcszZ1x+89r9zdFi8="
+    management: true
+    scopes:
+      dev: write
+

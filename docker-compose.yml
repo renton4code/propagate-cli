@@ -77,15 +77,13 @@ services:
       PROPAGATE_DATABASE_URL: *propagate-database-url
     volumes:
       - ./packages/backend/migrations:/migrations:ro
-    command:
-      - sh
-      - -ec
-      - psql "$$PROPAGATE_DATABASE_URL" -v ON_ERROR_STOP=1 -f /migrations/0001_init_schema.sql
+    command: ["sh", "-ec", "for f in /migrations/*.sql; do echo \"Applying $$f...\"; psql \"$$PROPAGATE_DATABASE_URL\" -v ON_ERROR_STOP=1 -f \"$$f\"; done"]
     restart: "no"
 
   propagate-api:
     build:
-      context: ./packages/backend
+      context: .
+      dockerfile: packages/backend/Dockerfile
     env_file:
       - path: ./packages/backend/.env
         required: false

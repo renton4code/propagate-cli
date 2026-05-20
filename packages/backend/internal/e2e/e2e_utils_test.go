@@ -5,6 +5,8 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -64,7 +66,14 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 	})
 	applyMigrations(t, ctx, db.DB, filepath.Join(root, "packages", "backend", "migrations"))
 
-	apiServer := httptest.NewServer(api.NewServer(storage.NewSQLStore(db.DB), api.Config{}))
+	relayPrivate, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate relay key: %v", err)
+	}
+	apiServer := httptest.NewServer(api.NewServer(storage.NewSQLStore(db.DB), api.Config{
+		RelayPrivateKey: relayPrivate,
+		RelayPublicKey:  relayPrivate.PublicKey(),
+	}))
 	t.Cleanup(apiServer.Close)
 
 	return &e2eHarness{

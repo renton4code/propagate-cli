@@ -288,7 +288,7 @@ func TestSequentialCLIAPIWithSupabaseDB(t *testing.T) {
 		_ = readFile(t, filepath.Join(repo, "propagate.yaml"))
 	})
 
-	t.Run("join by invite code records redemption metadata in propagate.yaml", func(t *testing.T) {
+	t.Run("pre-approved invite join grants immediate env pull", func(t *testing.T) {
 		result := h.run(repo, admin, "", "team", "invite", "--json", "--label", "e2e-invite", "--scope", "dev=read")
 		var inv teamInviteCreateJSON
 		decodeJSON(t, result.Stdout, &inv)
@@ -299,10 +299,20 @@ func TestSequentialCLIAPIWithSupabaseDB(t *testing.T) {
 		dana := h.newActor("dana@example.com")
 		dana = h.joinByInvite(repo, dana, inv.InviteID, inv.PIN, "dev=read")
 
-		status := h.teamStatus(repo, admin)
-		if !pendingJoinExists(status.PendingJoins, dana.PublicKeySHA) {
-			t.Fatalf("team status missing Dana after invite join:\n%+v", status)
-		}
+		configText := readFile(t, filepath.Join(repo, "propagate.yaml"))
+		requireContains(t, configText, dana.PublicKeySHA)
+
+		writeFile(t, filepath.Join(repo, ".env"), "", 0o600)
+		result = h.run(repo, dana, "", "env", "pull", "--json", "--yes", "--non-interactive")
+		requireNoPlaintext(t, result.Combined(), plaintextValues...)
+
+		envText := readFile(t, filepath.Join(repo, ".env"))
+		requireContainsAll(t, envText,
+			"DATABASE_URL="+databaseURL,
+			"API_TOKEN="+pushedAPIToken,
+			"ROTATED_TOKEN="+rotatedToken,
+			"PUSHED_ONLY="+pushedOnly,
+		)
 	})
 
 	t.Run("three wrong PIN attempts invalidate invite", func(t *testing.T) {
