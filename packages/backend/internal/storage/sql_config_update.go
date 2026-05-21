@@ -17,6 +17,23 @@ type snapshotMember struct {
 	Scopes              map[string]string `json:"scopes,omitempty"`
 }
 
+type snapshotTeamBlock struct {
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name"`
+}
+
+type snapshotScopeBlock struct {
+	EnvFiles  []string                    `json:"env_files"`
+	Variables []domain.VariableDeclaration `json:"variables,omitempty"`
+}
+
+type fullSnapshot struct {
+	Version int                           `json:"version"`
+	Team    snapshotTeamBlock             `json:"team"`
+	Scopes  map[string]snapshotScopeBlock `json:"scopes"`
+	Members []snapshotMember              `json:"members"`
+}
+
 func appendMemberToConfigSnapshot(ctx context.Context, tx *sql.Tx, teamID string, operationID string, actorKeySHA string, newMember snapshotMember) (int, string, error) {
 	var currentRevision int
 	var snapshot []byte
@@ -30,31 +47,14 @@ func appendMemberToConfigSnapshot(ctx context.Context, tx *sql.Tx, teamID string
 		return 0, "", err
 	}
 
-	var parsed struct {
-		Version json.RawMessage   `json:"version"`
-		Team    json.RawMessage   `json:"team"`
-		Scopes  json.RawMessage   `json:"scopes"`
-		Members []snapshotMember  `json:"members"`
-		Rest    json.RawMessage   `json:"-"`
-	}
+	var parsed fullSnapshot
 	if err := json.Unmarshal(snapshot, &parsed); err != nil {
 		return 0, "", err
 	}
 
 	parsed.Members = append(parsed.Members, newMember)
 
-	// Rebuild the full snapshot preserving all fields
-	var full map[string]json.RawMessage
-	if err := json.Unmarshal(snapshot, &full); err != nil {
-		return 0, "", err
-	}
-	membersJSON, err := json.Marshal(parsed.Members)
-	if err != nil {
-		return 0, "", err
-	}
-	full["members"] = membersJSON
-
-	updatedSnapshot, err := json.Marshal(full)
+	updatedSnapshot, err := json.Marshal(parsed)
 	if err != nil {
 		return 0, "", err
 	}

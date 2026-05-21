@@ -1273,15 +1273,11 @@ func isNoRows(err error) bool {
 }
 
 func appendMemberToMemorySnapshot(team *memoryTeam, member domain.Member) {
-	var full map[string]json.RawMessage
-	if err := json.Unmarshal(team.configSnapshot, &full); err != nil {
+	var parsed fullSnapshot
+	if err := json.Unmarshal(team.configSnapshot, &parsed); err != nil {
 		return
 	}
-	var members []snapshotMember
-	if raw, ok := full["members"]; ok {
-		_ = json.Unmarshal(raw, &members)
-	}
-	members = append(members, snapshotMember{
+	parsed.Members = append(parsed.Members, snapshotMember{
 		Handle:              member.Handle,
 		PublicKeySHA:        member.PublicKeySHA,
 		SigningPublicKey:    member.SigningPublicKey,
@@ -1289,12 +1285,7 @@ func appendMemberToMemorySnapshot(team *memoryTeam, member domain.Member) {
 		Management:          member.Management,
 		Scopes:              member.Scopes,
 	})
-	membersJSON, err := json.Marshal(members)
-	if err != nil {
-		return
-	}
-	full["members"] = membersJSON
-	updated, err := json.Marshal(full)
+	updated, err := json.Marshal(parsed)
 	if err != nil {
 		return
 	}

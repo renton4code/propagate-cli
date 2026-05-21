@@ -1,5 +1,5 @@
-- When developer joins via quickstart (config already exists) we should avoid step of adding AGENTS.md
-- Improve quickstart UX: add titles of steps: setting up project, inviting team etc.
-When team is invited you should be able to toggle read/write scopes + management.
-You should be able to add more than 1 team member
 - Improve status command UX, now it's too verbose and repetitive
+- When developer joins via quickstart (config already exists) we should avoid step of adding AGENTS.md
+- Review AGENTS.md (now it's low quality)
+- In pin codes avoid letter "O" for confusion with zero
+- If PIN entered incorrectly 3 times - we discard the invite

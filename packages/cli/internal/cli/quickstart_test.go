@@ -143,9 +143,9 @@ func TestQuickstartSetsUpProjectAndCreatesInvite(t *testing.T) {
 	}
 	output := stdout.String()
 	for _, want := range []string{
-		"Project setup & developer invite",
+		"Project setup & team invites",
 		"Project setup complete.",
-		"Developer invite created.",
+		"Team member invite created.",
 		"PIN: 4821-F",
 	} {
 		if !strings.Contains(output, want) {
@@ -154,6 +154,149 @@ func TestQuickstartSetsUpProjectAndCreatesInvite(t *testing.T) {
 	}
 	if strings.Contains(output, secret) || strings.Contains(stderr.String(), secret) {
 		t.Fatalf("quickstart output leaked env value\nstdout:\n%s\nstderr:\n%s", output, stderr.String())
+	}
+}
+
+func TestQuickstartCanCreateMultipleInvitesWithAccessPrompts(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+
+	if err := os.WriteFile(filepath.Join(repo, ".env"), []byte("SECRET=val\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	type inviteRequest struct {
+		label      string
+		management bool
+		scopes     map[string]string
+	}
+	var inviteRequests []inviteRequest
+	var setupTeamID string
+	var handlerErr error
+	previousClient := configPushHTTPClient
+	t.Cleanup(func() { configPushHTTPClient = previousClient })
+	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/teams/setup":
+			var request apiclient.TeamSetupRequest
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			var snapshot struct {
+				Team struct {
+					ID string `json:"id"`
+				} `json:"team"`
+			}
+			if err := json.Unmarshal(request.ConfigSnapshot, &snapshot); err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			setupTeamID = snapshot.Team.ID
+			return testResponse(t, http.StatusCreated, map[string]any{
+				"team_id":                   setupTeamID,
+				"config_revision":           "rev_00001",
+				"config_hash":               "sha256:setup",
+				"scopes_created":            []string{"dev"},
+				"encrypted_variables_count": float64(1),
+				"envelopes_count":           float64(1),
+			}), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/relay-public-key":
+			return testResponse(t, http.StatusOK, apiclient.RelayPublicKeyData{}), nil
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/invites"):
+			if setupTeamID == "" || !strings.Contains(r.URL.Path, setupTeamID) {
+				handlerErr = fmt.Errorf("invite path %q did not include setup team id %q", r.URL.Path, setupTeamID)
+				return nil, handlerErr
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			var request apiclient.CreateTeamInviteRequest
+			if err := json.Unmarshal(body, &request); err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			inviteRequests = append(inviteRequests, inviteRequest{
+				label:      request.Label,
+				management: request.RequestedManagement,
+				scopes:     request.RequestedScopes,
+			})
+			if len(inviteRequests) == 1 {
+				return testResponse(t, http.StatusCreated, apiclient.CreateTeamInviteResult{
+					InviteID: "inv_bob",
+					PIN:      "4821-F",
+					Label:    request.Label,
+				}), nil
+			}
+			return testResponse(t, http.StatusCreated, apiclient.CreateTeamInviteResult{
+				InviteID: "inv_carol",
+				PIN:      "9138-Q",
+				Label:    request.Label,
+			}), nil
+		default:
+			handlerErr = fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, handlerErr
+		}
+	}), Timeout: 2 * time.Second}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"quickstart",
+		"--handle", "alice@example.com",
+		"--team-name", "Acme API",
+		"--api-url", "http://propagate.test",
+		"--yes",
+		"--skip-agent-guidance",
+	}, Streams{
+		In:      strings.NewReader("Bob onboarding\nn\ndev=write\ny\nCarol manager\ny\n\nn\n"),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("quickstart exit = %d, stderr:\n%s", code, stderr.String())
+	}
+	if handlerErr != nil {
+		t.Fatal(handlerErr)
+	}
+	if len(inviteRequests) != 2 {
+		t.Fatalf("invite requests = %d, want 2", len(inviteRequests))
+	}
+	if inviteRequests[0].label != "Bob onboarding" || inviteRequests[0].management {
+		t.Fatalf("first invite access = %#v", inviteRequests[0])
+	}
+	if got := inviteRequests[0].scopes["dev"]; got != "write" {
+		t.Fatalf("first invite dev scope = %q, want write", got)
+	}
+	if inviteRequests[1].label != "Carol manager" || !inviteRequests[1].management {
+		t.Fatalf("second invite access = %#v", inviteRequests[1])
+	}
+	if got := inviteRequests[1].scopes["dev"]; got != "write" {
+		t.Fatalf("second invite dev scope = %q, want write", got)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"[1/2] Setting up project",
+		"[2/2] Inviting team",
+		"2 team member invites created.",
+		"PIN: 4821-F",
+		"PIN: 9138-Q",
+		"Management: true",
+		"dev: write",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("quickstart output missing %q:\n%s", want, output)
+		}
 	}
 }
 
@@ -207,7 +350,7 @@ func TestQuickstartRequiresInviteLabelAfterInit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, "propagate.yaml")); os.IsNotExist(err) {
 		t.Fatal("propagate.yaml should be written before invite label is prompted")
 	}
-	if !strings.Contains(stderr.String(), "Developer invite label is required") {
+	if !strings.Contains(stderr.String(), "Team member invite label is required") {
 		t.Fatalf("stderr missing label requirement:\n%s", stderr.String())
 	}
 }

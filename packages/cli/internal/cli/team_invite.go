@@ -26,18 +26,20 @@ type teamInviteOptions struct {
 
 // TeamInviteCreateResult is JSON output for `propagate team invite`.
 type TeamInviteCreateResult struct {
-	OK            bool     `json:"ok"`
-	Command       string   `json:"command"`
-	Status        string   `json:"status"`
-	DryRun        bool     `json:"dry_run"`
-	TeamID        string   `json:"team_id,omitempty"`
-	TeamName      string   `json:"team_name,omitempty"`
-	InviteID      string   `json:"invite_id,omitempty"`
-	PIN           string   `json:"pin,omitempty"`
-	Label         string   `json:"label,omitempty"`
-	BackendStatus string   `json:"backend_status"`
-	Warnings      []string `json:"warnings,omitempty"`
-	NextSteps     []string `json:"next_steps,omitempty"`
+	OK                  bool              `json:"ok"`
+	Command             string            `json:"command"`
+	Status              string            `json:"status"`
+	DryRun              bool              `json:"dry_run"`
+	TeamID              string            `json:"team_id,omitempty"`
+	TeamName            string            `json:"team_name,omitempty"`
+	InviteID            string            `json:"invite_id,omitempty"`
+	PIN                 string            `json:"pin,omitempty"`
+	Label               string            `json:"label,omitempty"`
+	RequestedManagement bool              `json:"requested_management,omitempty"`
+	RequestedScopes     map[string]string `json:"requested_scopes,omitempty"`
+	BackendStatus       string            `json:"backend_status"`
+	Warnings            []string          `json:"warnings,omitempty"`
+	NextSteps           []string          `json:"next_steps,omitempty"`
 }
 
 func runTeamInviteCommand(args []string, global globalOptions, streams Streams) int {
@@ -89,7 +91,7 @@ func runTeamInviteCreate(args []string, global globalOptions, streams Streams) i
 		return ExitSuccess
 	}
 	style := newOutputStyle(opts.NoColor)
-	renderCommandTitle(streams.Out, style, "Developer invite", opts.DryRun)
+	renderCommandTitle(streams.Out, style, "Team invite", opts.DryRun)
 	if result.DryRun {
 		renderNote(streams.Out, style, "Dry run: no invite was created.")
 	} else {
@@ -99,6 +101,7 @@ func runTeamInviteCreate(args []string, global globalOptions, streams Streams) i
 		fmt.Fprintf(streams.Out, "PIN: %s\n", result.PIN)
 		fmt.Fprintf(streams.Out, "Label: %s\n", result.Label)
 	}
+	renderInviteAccess(streams.Out, style, result.RequestedManagement, result.RequestedScopes)
 	renderWarnings(streams.Out, style, result.Warnings)
 	renderNextSteps(streams.Out, style, result.NextSteps)
 	return ExitSuccess
@@ -115,11 +118,14 @@ func runTeamInviteCreateExec(opts teamInviteOptions, streams Streams) (TeamInvit
 	}
 
 	result := TeamInviteCreateResult{
-		OK:            true,
-		Command:       "team invite",
-		Status:        "success",
-		DryRun:        opts.DryRun,
-		BackendStatus: "skipped",
+		OK:                  true,
+		Command:             "team invite",
+		Status:              "success",
+		DryRun:              opts.DryRun,
+		Label:               label,
+		RequestedManagement: opts.RequestedManagement,
+		RequestedScopes:     scopes,
+		BackendStatus:       "skipped",
 		NextSteps: []string{
 			"Share the PIN with the invitee through a trusted channel.",
 			"They can run `propagate team join` and choose Join by invite code.",
@@ -230,6 +236,22 @@ func runTeamInviteCreateExec(opts teamInviteOptions, streams Streams) (TeamInvit
 	result.Label = created.Label
 	result.BackendStatus = "created"
 	return result, nil
+}
+
+func renderInviteAccess(w io.Writer, style outputStyle, management bool, scopes map[string]string) {
+	if management {
+		fmt.Fprintln(w, "Management: true")
+	} else {
+		fmt.Fprintln(w, "Management: false")
+	}
+	if len(scopes) == 0 {
+		fmt.Fprintln(w, "Scopes: none specified")
+		return
+	}
+	fmt.Fprintln(w, style.bold("Scopes:"))
+	for _, scope := range sortedScopeNames(scopes) {
+		fmt.Fprintf(w, "  - %s: %s\n", scope, scopes[scope])
+	}
 }
 
 func runTeamInviteList(args []string, global globalOptions, streams Streams) int {

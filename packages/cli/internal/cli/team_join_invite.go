@@ -16,6 +16,7 @@ type inviteJoinMetadata struct {
 	BackendStatus     string
 	PreApproved       bool
 	ScopeKeyEnvelopes []apiclient.ScopeKeyEnvelope
+	Member            *apiclient.Member
 	Warnings          []string
 }
 
@@ -180,5 +181,6 @@ func resolveInviteJoinIfNeeded(streams Streams, opts *teamJoinOptions, teamID st
 	meta.BackendStatus = "invite_redeemed"
 	meta.PreApproved = pinRes.PreApproved
 	meta.ScopeKeyEnvelopes = pinRes.ScopeKeyEnvelopes
+	meta.Member = pinRes.Member
 	return meta, nil
 }

@@ -1,0 +1,60 @@
+# Propagate project configuration.
+# This file is safe to commit: it stores metadata and public keys only.
+# Do not add env values, masked values, private keys, tokens, or credentials here.
+version: 1
+team:
+  id: "team_9845ef172063614b"
+  name: "Propagate dev team"
+  cloud_revision: "rev_00002"
+  sync_status: "synced"
+
+scopes:
+  dev:
+    env_files:
+      - "packages/backend/.env"
+    variables:
+      - name: "PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:wQ9MgDsk9q-J8PXbUweRRNhQO73J45MHl4pX6SSJmfE"
+      - name: "PROPAGATE_API_PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:V8ea_ZdA4xTWkXERc6RORhhbXgshDHr63H5NBf4yJH0"
+      - name: "PROPAGATE_API_URL"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:zbSBai6J6aLCSh5XnjX_6k4sn5DEqsxw2V_igDuUdeA"
+      - name: "PROPAGATE_DATABASE_URL"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:beCdGC3YD3Ji5AGgED2ZdpkyEKoFeTTTL9LSjr4Hnrc"
+      - name: "PROPAGATE_DB_PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:1MYbtkD5q4Qw07Z7ZDYQSLJBL7VMGngXYBtzOXLGNd0"
+      - name: "SUPABASE_PG_META_CRYPTO_KEY"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:x1wl1dJkBr9NCQ7q2_dUrrEEJgmC3TA1sG7WB_ZKsJw"
+      - name: "SUPABASE_STUDIO_PORT"
+        env_file_path: "packages/backend/.env"
+        sensitivity: sensitive
+        digest: "hmac-sha-256:v1:SGT8iL9wYLkHQV6OtO0pqhmxpauM04YAvjbBUr-LOgM"
+
+members:
+  - handle: "Vlad"
+    public_key_sha: "sha256:bec8d2a8b0782dd2c6aea43e852e77aed03f53be3f71b33e2a93598f746efa41"
+    signing_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAdA5O9pwS6gZ1oOcQpFd1eMDtq7JEMOw48NHNqRNMWp Vlad"
+    encryption_public_key: "x25519:Va9pL6DZRNHpxTSJ8sVD3OnCbEiAA3KSBDSR2GB4RSI="
+    management: true
+    scopes:
+      dev: write
+  - handle: "Jaja"
+    public_key_sha: "sha256:1981426cc482a242d3816c93cf9aa87c65b5467f8cee848a33b0be1b63355077"
+    signing_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOyL2iFEZdOm3XaoF4k1g/3lXEF8bEAcNtQrW8qgCs8q Jaja"
+    encryption_public_key: "x25519:8Hl5dBieS58wh1kI72AA1nxXqHlGif4u0bI8FtZ4sC0="
+    management: true
+    scopes:
+      dev: write
+

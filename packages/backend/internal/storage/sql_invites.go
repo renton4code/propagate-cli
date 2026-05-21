@@ -197,6 +197,7 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 			return domain.InvitePINResult{}, err
 		}
 		preApproved := len(envelopes) > 0
+		var resultMember *domain.Member
 		if preApproved {
 			var reqMgmt bool
 			var reqScopes sql.NullString
@@ -222,20 +223,19 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 				return domain.InvitePINResult{}, err
 			}
 
+			var grantedScopes map[string]string
 			if reqScopes.Valid && reqScopes.String != "" {
-				var scopes map[string]string
-				if json.Unmarshal([]byte(reqScopes.String), &scopes) == nil {
-					for scopeName, permission := range scopes {
-						var scopeID int64
-						err := tx.QueryRowContext(ctx, `select id from scopes where team_id = $1 and name = $2`, teamID, scopeName).Scan(&scopeID)
-						if err != nil {
-							continue
-						}
-						_, _ = tx.ExecContext(ctx, `
-							insert into scope_access_rules (team_id, scope_id, subject_type, subject_value, permission, config_revision, active)
-							values ($1, $2, 'member', $3, $4, (select current_config_revision from teams where id = $1), true)
-						`, teamID, scopeID, request.Joiner.PublicKeySHA, permission)
+				_ = json.Unmarshal([]byte(reqScopes.String), &grantedScopes)
+				for scopeName, permission := range grantedScopes {
+					var scopeID int64
+					err := tx.QueryRowContext(ctx, `select id from scopes where team_id = $1 and name = $2`, teamID, scopeName).Scan(&scopeID)
+					if err != nil {
+						continue
 					}
+					_, _ = tx.ExecContext(ctx, `
+						insert into scope_access_rules (team_id, scope_id, subject_type, subject_value, permission, config_revision, active)
+						values ($1, $2, 'member', $3, $4, (select current_config_revision from teams where id = $1), true)
+					`, teamID, scopeID, request.Joiner.PublicKeySHA, permission)
 				}
 			}
 
@@ -251,10 +251,6 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 				`, teamID, scopeID, env.RecipientKeySHA, env.ScopeKeyVersion, env.EncryptedScopeKey, env.Algorithm)
 			}
 
-			var grantedScopes map[string]string
-			if reqScopes.Valid && reqScopes.String != "" {
-				_ = json.Unmarshal([]byte(reqScopes.String), &grantedScopes)
-			}
 			_, _, err = appendMemberToConfigSnapshot(ctx, tx, teamID, request.OperationID, request.Joiner.PublicKeySHA, snapshotMember{
 				Handle:              request.Handle,
 				PublicKeySHA:        request.Joiner.PublicKeySHA,
@@ -266,6 +262,18 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 			if err != nil {
 				return domain.InvitePINResult{}, err
 			}
+
+			resultMember = &domain.Member{
+				PublicIdentity: domain.PublicIdentity{
+					Handle:              request.Handle,
+					PublicKeySHA:        request.Joiner.PublicKeySHA,
+					SigningPublicKey:    request.Joiner.SigningPublicKey,
+					EncryptionPublicKey: request.Joiner.EncryptionPublicKey,
+				},
+				Management: reqMgmt,
+				Scopes:     grantedScopes,
+				Status:     "active",
+			}
 		}
 		if err := tx.Commit(); err != nil {
 			return domain.InvitePINResult{}, err
@@ -276,6 +284,7 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 			ServerTime:        serverTime,
 			PreApproved:       preApproved,
 			ScopeKeyEnvelopes: envelopes,
+			Member:            resultMember,
 		}, nil
 	}
 

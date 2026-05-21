@@ -47,6 +47,29 @@ type multiChoicePromptModel struct {
 	canceled         bool
 }
 
+type tuiAccessScope struct {
+	Name       string
+	Permission string
+}
+
+type tuiAccessResult struct {
+	Management bool
+	Scopes     map[string]string
+}
+
+type accessPromptModel struct {
+	title            string
+	description      []string
+	management       bool
+	scopes           []tuiAccessScope
+	cursor           int
+	requireAnyAccess bool
+	errText          string
+	result           tuiAccessResult
+	submitted        bool
+	canceled         bool
+}
+
 func newChoicePromptModel(title string, description []string, choices []tuiChoice, defaultIndex int) choicePromptModel {
 	if defaultIndex < 0 || defaultIndex >= len(choices) {
 		defaultIndex = 0
@@ -68,11 +91,30 @@ func newMultiChoicePromptModel(title string, description []string, choices []tui
 	}
 }
 
+func newAccessPromptModel(title string, description []string, management bool, scopes []tuiAccessScope, requireAnyAccess bool) accessPromptModel {
+	modelScopes := make([]tuiAccessScope, 0, len(scopes))
+	for _, scope := range scopes {
+		scope.Permission = normalizeAccessPermission(scope.Permission)
+		modelScopes = append(modelScopes, scope)
+	}
+	return accessPromptModel{
+		title:            title,
+		description:      description,
+		management:       management,
+		scopes:           modelScopes,
+		requireAnyAccess: requireAnyAccess,
+	}
+}
+
 func (m choicePromptModel) Init() tea.Cmd {
 	return nil
 }
 
 func (m multiChoicePromptModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m accessPromptModel) Init() tea.Cmd {
 	return nil
 }
 
@@ -147,6 +189,77 @@ func (m multiChoicePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m accessPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	maxCursor := len(m.scopes)
+	switch key.String() {
+	case "ctrl+c", "esc":
+		m.canceled = true
+		return m, tea.Quit
+	case "up", "k", "shift+tab":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j", "tab":
+		if m.cursor < maxCursor {
+			m.cursor++
+		}
+	case "home":
+		m.cursor = 0
+	case "end":
+		m.cursor = maxCursor
+	case " ":
+		m.errText = ""
+		if m.cursor == 0 {
+			m.management = !m.management
+		} else {
+			m.scopes[m.cursor-1].Permission = nextAccessPermission(m.scopes[m.cursor-1].Permission)
+		}
+	case "left", "h":
+		m.errText = ""
+		if m.cursor > 0 {
+			m.scopes[m.cursor-1].Permission = previousAccessPermission(m.scopes[m.cursor-1].Permission)
+		}
+	case "right", "l":
+		m.errText = ""
+		if m.cursor > 0 {
+			m.scopes[m.cursor-1].Permission = nextAccessPermission(m.scopes[m.cursor-1].Permission)
+		}
+	case "m", "M":
+		m.management = !m.management
+		m.errText = ""
+	case "n", "N":
+		m.errText = ""
+		if m.cursor == 0 {
+			m.management = false
+		} else {
+			m.scopes[m.cursor-1].Permission = "none"
+		}
+	case "r", "R":
+		if m.cursor > 0 {
+			m.scopes[m.cursor-1].Permission = "read"
+			m.errText = ""
+		}
+	case "w", "W":
+		if m.cursor > 0 {
+			m.scopes[m.cursor-1].Permission = "write"
+			m.errText = ""
+		}
+	case "y", "Y":
+		m.errText = ""
+		if m.cursor == 0 {
+			m.management = true
+		}
+	case "enter":
+		return m.submit()
+	}
+	return m, nil
+}
+
 func (m choicePromptModel) submit() (tea.Model, tea.Cmd) {
 	if len(m.choices) == 0 {
 		m.canceled = true
@@ -172,6 +285,24 @@ func (m multiChoicePromptModel) submit() (tea.Model, tea.Cmd) {
 		m.errText = "Select at least one item, or press Esc to cancel."
 		return m, nil
 	}
+	m.submitted = true
+	return m, tea.Quit
+}
+
+func (m accessPromptModel) submit() (tea.Model, tea.Cmd) {
+	scopes := map[string]string{}
+	for _, scope := range m.scopes {
+		permission := normalizeAccessPermission(scope.Permission)
+		if permission == "none" {
+			continue
+		}
+		scopes[scope.Name] = permission
+	}
+	if m.requireAnyAccess && !m.management && len(scopes) == 0 {
+		m.errText = "Grant management or at least one scope, or press Esc to cancel."
+		return m, nil
+	}
+	m.result = tuiAccessResult{Management: m.management, Scopes: scopes}
 	m.submitted = true
 	return m, tea.Quit
 }
@@ -265,6 +396,52 @@ func (m multiChoicePromptModel) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString("Space toggles. A toggles all. Enter submits. Esc cancels.\n")
+	return b.String()
+}
+
+func (m accessPromptModel) View() string {
+	var b strings.Builder
+	if m.title != "" {
+		b.WriteString(m.title)
+		b.WriteString("\n")
+	}
+	for _, line := range m.description {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if len(m.description) > 0 {
+		b.WriteString("\n")
+	}
+
+	cursor := " "
+	if m.cursor == 0 {
+		cursor = ">"
+	}
+	marker := " "
+	if m.management {
+		marker = "x"
+	}
+	fmt.Fprintf(&b, "%s [%s] Management\n", cursor, marker)
+	fmt.Fprintf(&b, "      Can manage project config, invites, and team access.\n")
+
+	for idx, scope := range m.scopes {
+		cursor := " "
+		if m.cursor == idx+1 {
+			cursor = ">"
+		}
+		fmt.Fprintf(&b, "%s [%s] %s\n", cursor, normalizeAccessPermission(scope.Permission), scope.Name)
+		fmt.Fprintf(&b, "      Space/right cycles none, read, write. R/W/N choose directly.\n")
+	}
+	if m.errText != "" {
+		b.WriteString("\n")
+		b.WriteString(m.errText)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("Space toggles/cycles. M toggles management. Enter submits. Esc cancels.\n")
 	return b.String()
 }
 
@@ -373,6 +550,18 @@ func promptChoiceTUI(in io.Reader, out io.Writer, title string, description []st
 	return model.selected, nil
 }
 
+func promptAccessTUI(in io.Reader, out io.Writer, title string, description []string, management bool, scopes []tuiAccessScope, requireAnyAccess bool) (tuiAccessResult, error) {
+	final, err := runTUIPrompt(in, out, newAccessPromptModel(title, description, management, scopes, requireAnyAccess))
+	if err != nil {
+		return tuiAccessResult{}, commandError(ExitUserCanceled, "user_canceled", "Prompt could not read input", err)
+	}
+	model, ok := final.(accessPromptModel)
+	if !ok || model.canceled || !model.submitted {
+		return tuiAccessResult{}, commandError(ExitUserCanceled, "user_canceled", "Prompt was canceled", nil)
+	}
+	return model.result, nil
+}
+
 func promptMultiChoiceTUI(in io.Reader, out io.Writer, title string, description []string, choices []tuiMultiChoice, requireSelection bool) ([]string, error) {
 	if len(choices) == 0 {
 		return nil, commandError(ExitValidationError, "validation_failed", "Prompt has no choices", nil)
@@ -398,6 +587,39 @@ func promptTextTUI(in io.Reader, out io.Writer, label string, allowEmpty bool, t
 		return "", commandError(ExitUserCanceled, "user_canceled", "Prompt was canceled", nil)
 	}
 	return model.value, nil
+}
+
+func normalizeAccessPermission(permission string) string {
+	switch strings.ToLower(strings.TrimSpace(permission)) {
+	case "read":
+		return "read"
+	case "write", "admin":
+		return "write"
+	default:
+		return "none"
+	}
+}
+
+func nextAccessPermission(permission string) string {
+	switch normalizeAccessPermission(permission) {
+	case "none":
+		return "read"
+	case "read":
+		return "write"
+	default:
+		return "none"
+	}
+}
+
+func previousAccessPermission(permission string) string {
+	switch normalizeAccessPermission(permission) {
+	case "write":
+		return "read"
+	case "read":
+		return "none"
+	default:
+		return "write"
+	}
 }
 
 func promptRequired(reader *bufio.Reader, in io.Reader, out io.Writer, nonInteractive bool, label string) (string, error) {

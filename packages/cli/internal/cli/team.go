@@ -278,6 +278,12 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 				Management:          opts.RequestedManagement,
 				Scopes:              requestedScopes,
 			}
+			if inviteMeta.Member != nil {
+				member.Management = inviteMeta.Member.Management
+				if len(inviteMeta.Member.Scopes) > 0 {
+					member.Scopes = inviteMeta.Member.Scopes
+				}
+			}
 			nextConfig, err := config.RenderWithApprovedMember(project, member)
 			if err != nil {
 				if errors.Is(err, config.ErrAlreadyMember) {

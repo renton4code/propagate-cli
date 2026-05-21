@@ -30,16 +30,17 @@ type quickstartOptions struct {
 }
 
 type QuickstartResult struct {
-	OK        bool                    `json:"ok"`
-	Command   string                  `json:"command"`
-	Mode      string                  `json:"mode"`
-	Status    string                  `json:"status"`
-	DryRun    bool                    `json:"dry_run"`
-	Init      *InitResult             `json:"init,omitempty"`
-	Invite    *TeamInviteCreateResult `json:"invite,omitempty"`
-	Join      *TeamJoinResult         `json:"join,omitempty"`
-	Warnings  []string                `json:"warnings,omitempty"`
-	NextSteps []string                `json:"next_steps,omitempty"`
+	OK        bool                     `json:"ok"`
+	Command   string                   `json:"command"`
+	Mode      string                   `json:"mode"`
+	Status    string                   `json:"status"`
+	DryRun    bool                     `json:"dry_run"`
+	Init      *InitResult              `json:"init,omitempty"`
+	Invite    *TeamInviteCreateResult  `json:"invite,omitempty"`
+	Invites   []TeamInviteCreateResult `json:"invites,omitempty"`
+	Join      *TeamJoinResult          `json:"join,omitempty"`
+	Warnings  []string                 `json:"warnings,omitempty"`
+	NextSteps []string                 `json:"next_steps,omitempty"`
 }
 
 func runQuickstartCommand(args []string, global globalOptions, streams Streams) int {
@@ -49,10 +50,10 @@ func runQuickstartCommand(args []string, global globalOptions, streams Streams) 
 	addGlobalFlags(fs, &opts.globalOptions)
 	fs.StringVar(&opts.Handle, "handle", "", "handle for a new local identity")
 	fs.StringVar(&opts.TeamName, "team-name", "", "team name for new project setup")
-	fs.StringVar(&opts.InviteLabel, "invite-label", "", "human-readable label for the developer invite")
+	fs.StringVar(&opts.InviteLabel, "invite-label", "", "human-readable label for the first team member invite")
 	fs.StringVar(&opts.InviteLabel, "label", "", "alias for --invite-label")
-	fs.BoolVar(&opts.RequestedManagement, "management", false, "default management request for the invited developer")
-	fs.Var(&opts.RequestedScopes, "scope", "default developer scope permission scope=perm; may be repeated")
+	fs.BoolVar(&opts.RequestedManagement, "management", false, "default management request for invited team members")
+	fs.Var(&opts.RequestedScopes, "scope", "default team member scope permission scope=perm; may be repeated")
 	fs.BoolVar(&opts.Yes, "yes", false, "accept safe default setup decisions")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "show what would happen without writing files or creating an invite")
 	fs.BoolVar(&opts.AgentGuidance, "agent-guidance", false, "create or update AGENTS.md guidance")
@@ -106,6 +107,9 @@ func runQuickstart(opts quickstartOptions, streams Streams) (QuickstartResult, e
 		)
 	}
 
+	renderQuickstartStep(streams.Out, opts, 1, 2, "Setting up project", []string{
+		"Create or reuse your local identity, discover env files, and prepare encrypted project metadata.",
+	})
 	initResult, err := runInitWithReader(initOptions{
 		globalOptions:     opts.globalOptions,
 		Handle:            opts.Handle,
@@ -119,29 +123,13 @@ func runQuickstart(opts quickstartOptions, streams Streams) (QuickstartResult, e
 		return QuickstartResult{}, err
 	}
 
-	if strings.TrimSpace(opts.InviteLabel) == "" {
-		label, err := promptRequired(reader, streams.In, streams.Out, opts.NonInteractive, "Developer invite label")
-		if err != nil {
-			return QuickstartResult{}, err
-		}
-		opts.InviteLabel = label
-	}
-
-	inviteScopes, err := quickstartInviteScopeFlags(opts, initResult, reader, streams)
-	if err != nil {
-		return QuickstartResult{}, err
-	}
-
-	inviteResult, err := runTeamInviteCreateExec(teamInviteOptions{
-		globalOptions:       opts.globalOptions,
-		Label:               opts.InviteLabel,
-		RequestedManagement: opts.RequestedManagement,
-		RequestedScopes:     inviteScopes,
-		DryRun:              opts.DryRun,
-	}, streams)
+	renderQuickstartStep(streams.Out, opts, 2, 2, "Inviting team", []string{
+		"Create teammate invite codes and choose management plus scope access for each person.",
+	})
+	inviteResults, err := runQuickstartInviteLoop(opts, initResult, reader, streams)
 	if err != nil {
 		if cmdErr, ok := err.(*CommandError); ok && initResult.ProjectCreated && !opts.DryRun {
-			cmdErr.NextSteps = append(cmdErr.NextSteps, "Project setup completed; after resolving the invite error, run `propagate team invite --label VALUE` to create the developer invite.")
+			cmdErr.NextSteps = append(cmdErr.NextSteps, "Project setup completed; after resolving the invite error, run `propagate team invite --label VALUE` to create teammate invites.")
 		}
 		return QuickstartResult{}, err
 	}
@@ -153,10 +141,15 @@ func runQuickstart(opts quickstartOptions, streams Streams) (QuickstartResult, e
 		Status:  "success",
 		DryRun:  opts.DryRun,
 		Init:    &initResult,
-		Invite:  &inviteResult,
+		Invites: inviteResults,
+	}
+	if len(inviteResults) > 0 {
+		result.Invite = &result.Invites[0]
 	}
 	result.Warnings = append(result.Warnings, initResult.Warnings...)
-	result.Warnings = append(result.Warnings, inviteResult.Warnings...)
+	for _, inviteResult := range inviteResults {
+		result.Warnings = append(result.Warnings, inviteResult.Warnings...)
+	}
 	result.NextSteps = quickstartNextSteps(result)
 	if opts.DryRun {
 		result.Status = "dry_run"
@@ -165,6 +158,9 @@ func runQuickstart(opts quickstartOptions, streams Streams) (QuickstartResult, e
 }
 
 func runQuickstartJoinExisting(opts quickstartOptions, streams Streams) (QuickstartResult, error) {
+	renderQuickstartStep(streams.Out, opts, 1, 1, "Joining team", []string{
+		"Use this existing project config to request or redeem team access for your identity.",
+	})
 	joinResult, err := runTeamJoin(teamJoinOptions{
 		globalOptions:       opts.globalOptions,
 		Handle:              opts.Handle,
@@ -194,6 +190,57 @@ func runQuickstartJoinExisting(opts quickstartOptions, streams Streams) (Quickst
 	return result, nil
 }
 
+func runQuickstartInviteLoop(opts quickstartOptions, initResult InitResult, reader *bufio.Reader, streams Streams) ([]TeamInviteCreateResult, error) {
+	scopeNames := quickstartScopeNames(initResult)
+	var inviteResults []TeamInviteCreateResult
+	for inviteIndex := 1; ; inviteIndex++ {
+		label := strings.TrimSpace(opts.InviteLabel)
+		if inviteIndex > 1 || label == "" {
+			var err error
+			label, err = promptRequired(reader, streams.In, streams.Out, opts.NonInteractive, quickstartInviteLabelPrompt(inviteIndex))
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		management, inviteScopes, err := quickstartInviteAccess(opts, scopeNames, label, reader, streams)
+		if err != nil {
+			return nil, err
+		}
+		inviteResult, err := runTeamInviteCreateExec(teamInviteOptions{
+			globalOptions:       opts.globalOptions,
+			Label:               label,
+			RequestedManagement: management,
+			RequestedScopes:     inviteScopes,
+			DryRun:              opts.DryRun,
+		}, streams)
+		if err != nil {
+			return nil, err
+		}
+		inviteResults = append(inviteResults, inviteResult)
+
+		if opts.NonInteractive {
+			break
+		}
+		another, err := promptConfirm(reader, streams.In, streams.Out, "Invite another team member?", false)
+		if err != nil {
+			return nil, err
+		}
+		if !another {
+			break
+		}
+		opts.InviteLabel = ""
+	}
+	return inviteResults, nil
+}
+
+func quickstartInviteLabelPrompt(inviteIndex int) string {
+	if inviteIndex <= 1 {
+		return "Team member invite label"
+	}
+	return fmt.Sprintf("Team member %d invite label", inviteIndex)
+}
+
 func quickstartHasProjectConfig(streams Streams) (bool, error) {
 	worktree, err := gitutil.Discover(streams.WorkDir)
 	if err != nil {
@@ -206,75 +253,62 @@ func quickstartHasProjectConfig(streams Streams) (bool, error) {
 	return exists, nil
 }
 
-func quickstartInviteScopeFlags(opts quickstartOptions, initResult InitResult, reader *bufio.Reader, streams Streams) (scopeFlags, error) {
+func quickstartInviteAccess(opts quickstartOptions, scopeNames []string, label string, reader *bufio.Reader, streams Streams) (bool, scopeFlags, error) {
 	if len(opts.RequestedScopes) > 0 {
-		return opts.RequestedScopes, nil
+		return opts.RequestedManagement, opts.RequestedScopes, nil
 	}
-	scopeNames := quickstartScopeNames(initResult)
 	if opts.RequestedManagement {
-		out := make(scopeFlags, 0, len(scopeNames))
-		for _, scope := range scopeNames {
-			out = append(out, scope+"=write")
-		}
-		return out, nil
+		return true, quickstartDefaultInviteScopes(scopeNames, true), nil
 	}
 
-	defaults := quickstartDefaultDeveloperScopes(scopeNames)
+	defaults := quickstartDefaultInviteScopes(scopeNames, false)
 	if opts.NonInteractive {
-		return defaults, nil
+		return false, defaults, nil
 	}
 	if promptCanUseTUI(streams.In, streams.Out) {
-		choices := make([]tuiMultiChoice, 0, len(scopeNames))
-		defaultSelected := map[string]bool{}
-		for _, item := range defaults {
-			name, _, _ := strings.Cut(item, "=")
-			defaultSelected[name] = true
-		}
+		defaultAccess := quickstartScopeFlagMap(defaults)
+		accessScopes := make([]tuiAccessScope, 0, len(scopeNames))
 		for _, scope := range scopeNames {
-			choices = append(choices, tuiMultiChoice{
-				Label:       scope + " read",
-				Description: "Grant read access when the invite is redeemed",
-				Value:       scope,
-				Selected:    defaultSelected[scope],
+			permission := defaultAccess[scope]
+			if permission == "" {
+				permission = "none"
+			}
+			accessScopes = append(accessScopes, tuiAccessScope{
+				Name:       scope,
+				Permission: permission,
 			})
 		}
-		selected, err := promptMultiChoiceTUI(streams.In, streams.Out, "Choose developer invite scopes", []string{
-			"Select scopes to grant read access when the invite is redeemed.",
-		}, choices, true)
+		access, err := promptAccessTUI(streams.In, streams.Out, "Access for "+label, []string{
+			"Choose what this invite can do when it is redeemed.",
+		}, false, accessScopes, true)
 		if err != nil {
-			return nil, err
+			return false, nil, err
 		}
-		out := make(scopeFlags, 0, len(selected))
-		for _, scope := range selected {
-			out = append(out, scope+"=read")
-		}
-		return out, nil
+		return access.Management, quickstartScopeFlagsFromMap(scopeNames, access.Scopes), nil
 	}
 
-	input, err := promptOptionalLine(reader, streams.Out, "Developer invite scopes (comma-separated, default "+strings.Join(defaults, ", ")+")")
+	management, err := promptConfirm(reader, streams.In, streams.Out, "Grant management access to "+label+"?", false)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
-	if strings.TrimSpace(input) == "" {
-		return defaults, nil
-	}
-	var out scopeFlags
-	for _, part := range strings.Split(input, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
+	defaults = quickstartDefaultInviteScopes(scopeNames, management)
+	for {
+		input, err := promptOptionalLine(reader, streams.Out, "Scope access for "+label+" (comma-separated scope=read|write|none, default "+strings.Join(defaults, ", ")+")")
+		if err != nil {
+			return false, nil, err
 		}
-		if !strings.Contains(part, "=") {
-			part += "=read"
+		if strings.TrimSpace(input) == "" {
+			return management, defaults, nil
 		}
-		if err := out.Set(part); err != nil {
-			return nil, commandError(ExitUsageError, "usage_error", "Invalid developer invite scope", err)
+		out, err := quickstartParseInviteScopes(input)
+		if err != nil {
+			return false, nil, err
 		}
+		if management || len(out) > 0 {
+			return management, out, nil
+		}
+		fmt.Fprintln(streams.Out, "Grant management or at least one scope, or press Ctrl+C to cancel.")
 	}
-	if len(out) == 0 {
-		return defaults, nil
-	}
-	return out, nil
 }
 
 func quickstartScopeNames(initResult InitResult) []string {
@@ -302,6 +336,20 @@ func quickstartScopeNames(initResult InitResult) []string {
 	return names
 }
 
+func quickstartDefaultInviteScopes(scopeNames []string, management bool) scopeFlags {
+	if management {
+		if len(scopeNames) == 0 {
+			return scopeFlags{"dev=write"}
+		}
+		out := make(scopeFlags, 0, len(scopeNames))
+		for _, scope := range scopeNames {
+			out = append(out, scope+"=write")
+		}
+		return out
+	}
+	return quickstartDefaultDeveloperScopes(scopeNames)
+}
+
 func quickstartDefaultDeveloperScopes(scopeNames []string) scopeFlags {
 	if len(scopeNames) == 0 {
 		return scopeFlags{"dev=read"}
@@ -314,18 +362,105 @@ func quickstartDefaultDeveloperScopes(scopeNames []string) scopeFlags {
 	return scopeFlags{scopeNames[0] + "=read"}
 }
 
+func quickstartScopeFlagMap(flags scopeFlags) map[string]string {
+	out := map[string]string{}
+	for _, item := range flags {
+		name, permission, ok := strings.Cut(item, "=")
+		if !ok {
+			permission = "read"
+		}
+		name = strings.TrimSpace(name)
+		permission = strings.TrimSpace(permission)
+		if name != "" && permission != "" && permission != "none" {
+			out[name] = permission
+		}
+	}
+	return out
+}
+
+func quickstartScopeFlagsFromMap(scopeNames []string, scopes map[string]string) scopeFlags {
+	out := make(scopeFlags, 0, len(scopes))
+	seen := map[string]bool{}
+	if len(scopeNames) == 0 {
+		scopeNames = sortedScopeNames(scopes)
+	}
+	for _, scope := range scopeNames {
+		if permission := scopes[scope]; permission != "" && permission != "none" {
+			out = append(out, scope+"="+permission)
+			seen[scope] = true
+		}
+	}
+	for scope, permission := range scopes {
+		if seen[scope] || permission == "" || permission == "none" {
+			continue
+		}
+		out = append(out, scope+"="+permission)
+	}
+	return out
+}
+
+func quickstartParseInviteScopes(input string) (scopeFlags, error) {
+	var out scopeFlags
+	for _, part := range strings.Split(input, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "=") {
+			part += "=read"
+		}
+		name, permission, _ := strings.Cut(part, "=")
+		if strings.TrimSpace(permission) == "none" {
+			if err := out.Set(strings.TrimSpace(name) + "=none"); err != nil {
+				return nil, commandError(ExitUsageError, "usage_error", "Invalid invite scope", err)
+			}
+			continue
+		}
+		if err := out.Set(part); err != nil {
+			return nil, commandError(ExitUsageError, "usage_error", "Invalid invite scope", err)
+		}
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	scopeMap, err := out.Map()
+	if err != nil {
+		return nil, commandError(ExitUsageError, "usage_error", "Invalid invite scope", err)
+	}
+	return quickstartScopeFlagsFromMap(nil, scopeMap), nil
+}
+
 func quickstartNextSteps(result QuickstartResult) []string {
 	if result.DryRun {
-		return []string{"Re-run without `--dry-run` to set up the project and create the developer invite."}
+		return []string{"Re-run without `--dry-run` to set up the project and create teammate invites."}
+	}
+	pinStep := "Share the PIN with the teammate through a trusted channel."
+	if len(result.Invites) > 1 {
+		pinStep = "Share each PIN with its teammate through a trusted channel."
 	}
 	steps := []string{
-		"Share the PIN with the developer through a trusted channel.",
+		pinStep,
 		"They can run `propagate team join` and choose Join by invite code.",
 	}
 	if result.Init != nil && (result.Init.ProjectCreated || result.Init.AgentGuidance.Status == "created" || result.Init.AgentGuidance.Status == "updated") {
 		steps = append(steps, "Commit the reviewed propagate.yaml or AGENTS.md changes when ready.")
 	}
 	return steps
+}
+
+func renderQuickstartStep(w io.Writer, opts quickstartOptions, index int, total int, title string, description []string) {
+	if opts.JSON {
+		return
+	}
+	style := newOutputStyle(opts.NoColor)
+	fmt.Fprintf(w, "%s\n", style.bold(fmt.Sprintf("[%d/%d] %s", index, total, title)))
+	for _, line := range description {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fmt.Fprintf(w, "%s %s\n", style.note(), line)
+	}
+	fmt.Fprintln(w)
 }
 
 func renderQuickstartResult(w io.Writer, jsonOutput bool, noColor bool, result QuickstartResult) {
@@ -341,8 +476,8 @@ func renderQuickstartResult(w io.Writer, jsonOutput bool, noColor bool, result Q
 	}
 
 	style := newOutputStyle(noColor)
-	renderCommandTitle(w, style, "Project setup & developer invite", result.DryRun)
-	if result.Init == nil || result.Invite == nil {
+	renderCommandTitle(w, style, "Project setup & team invites", result.DryRun)
+	if result.Init == nil || len(result.Invites) == 0 {
 		renderNote(w, style, "No quickstart work was performed.")
 		renderWarnings(w, style, result.Warnings)
 		renderNextSteps(w, style, result.NextSteps)
@@ -367,17 +502,40 @@ func renderQuickstartResult(w io.Writer, jsonOutput bool, noColor bool, result Q
 		fmt.Fprintf(w, "Setup backend: %s\n", result.Init.BackendStatus)
 	}
 	fmt.Fprintln(w)
-	if result.Invite.DryRun {
-		renderNote(w, style, "Developer invite would be created.")
+	if result.DryRun {
+		renderNote(w, style, quickstartInviteCountLine(result.Invites, "would be created"))
 	} else {
-		renderOK(w, style, "Developer invite created.")
-		renderNote(w, style, "Share the PIN out of band. It will not be shown again.")
-		fmt.Fprintf(w, "Invite id: %s\n", result.Invite.InviteID)
-		fmt.Fprintf(w, "PIN: %s\n", result.Invite.PIN)
-		fmt.Fprintf(w, "Label: %s\n", result.Invite.Label)
+		renderOK(w, style, quickstartInviteCountLine(result.Invites, "created"))
+		renderNote(w, style, "Share each PIN out of band. It will not be shown again.")
 	}
+	renderQuickstartInvites(w, style, result.Invites)
 	renderWarnings(w, style, result.Warnings)
 	renderNextSteps(w, style, result.NextSteps)
+}
+
+func quickstartInviteCountLine(invites []TeamInviteCreateResult, suffix string) string {
+	if len(invites) == 1 {
+		return "Team member invite " + suffix + "."
+	}
+	return fmt.Sprintf("%d team member invites %s.", len(invites), suffix)
+}
+
+func renderQuickstartInvites(w io.Writer, style outputStyle, invites []TeamInviteCreateResult) {
+	for idx, invite := range invites {
+		if len(invites) > 1 {
+			fmt.Fprintf(w, "\n%s\n", style.bold(fmt.Sprintf("Invite %d", idx+1)))
+		}
+		if invite.InviteID != "" {
+			fmt.Fprintf(w, "Invite id: %s\n", invite.InviteID)
+		}
+		if invite.PIN != "" {
+			fmt.Fprintf(w, "PIN: %s\n", invite.PIN)
+		}
+		if invite.Label != "" {
+			fmt.Fprintf(w, "Label: %s\n", invite.Label)
+		}
+		renderInviteAccess(w, style, invite.RequestedManagement, invite.RequestedScopes)
+	}
 }
 
 func printQuickstartHelp(w io.Writer) {
@@ -389,7 +547,7 @@ func printQuickstartHelp(w io.Writer) {
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  --handle VALUE           handle for a new local identity")
 	fmt.Fprintln(w, "  --team-name VALUE        team name for new project setup")
-	fmt.Fprintln(w, "  --invite-label VALUE     label for the developer invite")
+	fmt.Fprintln(w, "  --invite-label VALUE     label for the first team member invite")
 	fmt.Fprintln(w, "  --label VALUE            alias for --invite-label")
 	fmt.Fprintln(w, "  --management             grant management access when the invite is redeemed")
 	fmt.Fprintln(w, "  --scope VALUE            invite scope permission scope=perm; prompts/defaults when omitted")
