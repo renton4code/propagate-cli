@@ -8,6 +8,9 @@ import (
 func TestRenderBlockIncludesCommandGuidance(t *testing.T) {
 	block := RenderBlock()
 	for _, want := range []string{
+		"**Common tasks**",
+		"**Safety rules**",
+		"**Discover commands**",
 		"propagate --help",
 		"propagate <group> --help",
 		"--non-interactive",

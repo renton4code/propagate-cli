@@ -1,3 +1,2 @@
-- Review AGENTS.md (now it's low quality)
 - In pin codes avoid letter "O" for confusion with zero
 - If PIN entered incorrectly 3 times - we discard the invite

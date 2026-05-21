@@ -127,7 +127,7 @@ Decline a pending join request:
 propagate team decline <public_key_sha>
 ```
 
-After approval, run `propagate config pull` to update local `propagate.yaml` with the new member.
+`propagate team approve` automatically runs `propagate config pull` to update local `propagate.yaml` with the new member. If that automatic refresh fails, the command prints a next step asking you to run `propagate config pull` manually.
 
 ## Pull Cloud Config
 
@@ -254,6 +254,21 @@ propagate env set NAME --scope dev --value-stdin --yes --non-interactive
 Keep `--scope` explicit in non-interactive runs whenever the repository has multiple scopes.
 
 Never pass the value as a positional argument. Never show the value in terminal summaries, docs, issue text, pull requests, tests, or agent messages.
+
+## Agent Guidance Block (`AGENTS.md`)
+
+`propagate init` and `propagate quickstart` (new project flow) can write a managed Propagate block into `AGENTS.md` so coding agents working in this repo know how to handle env values. The block is delimited by `<!-- BEGIN PROPAGATE MANAGED BLOCK v1 -->` and `<!-- END PROPAGATE MANAGED BLOCK v1 -->` and is always rewritten in place — edits inside the block are overwritten on the next run, but content outside the markers is preserved.
+
+Pass `--agent-guidance` to opt in or `--skip-agent-guidance` to skip. The existing-project quickstart flow (`propagate.yaml` already present) always skips guidance because the template was placed when the project was first set up.
+
+The current block contains:
+
+- A one-paragraph orientation: Propagate manages this repository's env values; values live encrypted in the cloud; never commit, copy, or invent them.
+- **Common tasks** — recipe-style commands for inspecting state, running code with env values, pulling/pushing env files, setting one value, and syncing/pushing config. Each task names the safe `--dry-run` preview before any `--yes` write.
+- **Safety rules** — concrete don'ts (no values in docs/tests/PRs, no env-dumping commands inside `propagate run`, no positional values for `propagate env set`, stop and report on permission/stale/pending-join errors).
+- **Discover commands** — pointers to `propagate --help`, `propagate <group> --help`, and `propagate <group> <command> --help`, plus the `--json` / `--non-interactive` / `--no-color` global flags.
+
+Run `propagate init --agent-guidance` after a CLI upgrade to refresh the block to the latest template if Propagate ships an updated version.
 
 ## Handle Permission Or Revision Errors
 
