@@ -250,6 +250,22 @@ func (s *SQLStore) SubmitInvitePIN(ctx context.Context, teamID string, inviteID 
 					values ($1, $2, $3, $4, $5, $6, $3, (select current_config_revision from teams where id = $1))
 				`, teamID, scopeID, env.RecipientKeySHA, env.ScopeKeyVersion, env.EncryptedScopeKey, env.Algorithm)
 			}
+
+			var grantedScopes map[string]string
+			if reqScopes.Valid && reqScopes.String != "" {
+				_ = json.Unmarshal([]byte(reqScopes.String), &grantedScopes)
+			}
+			_, _, err = appendMemberToConfigSnapshot(ctx, tx, teamID, request.OperationID, request.Joiner.PublicKeySHA, snapshotMember{
+				Handle:              request.Handle,
+				PublicKeySHA:        request.Joiner.PublicKeySHA,
+				SigningPublicKey:    request.Joiner.SigningPublicKey,
+				EncryptionPublicKey: request.Joiner.EncryptionPublicKey,
+				Management:          reqMgmt,
+				Scopes:              grantedScopes,
+			})
+			if err != nil {
+				return domain.InvitePINResult{}, err
+			}
 		}
 		if err := tx.Commit(); err != nil {
 			return domain.InvitePINResult{}, err

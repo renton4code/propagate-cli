@@ -123,16 +123,24 @@ func runTeamApprove(targetSHA string, dryRun bool, opts globalOptions, streams S
 		return TeamApproveResult{}, mapAPIError(err, "Cannot approve join request")
 	}
 
+	pullResult, pullErr := runConfigPull(configPullOptions{
+		globalOptions: opts,
+		Yes:           true,
+	}, streams)
+	nextSteps := []string{fmt.Sprintf("Member %s (%s) is now active.", target.Handle, targetSHA)}
+	if pullErr != nil {
+		nextSteps = append(nextSteps, "Run `propagate config pull` to update local propagate.yaml.")
+	} else if pullResult.Updated {
+		nextSteps = append(nextSteps, "Local propagate.yaml updated with new member.")
+	}
+
 	return TeamApproveResult{
 		OK:             true,
 		Command:        "team approve",
 		Status:         "success",
 		PublicKeySHA:   targetSHA,
 		ConfigRevision: result.ConfigRevision,
-		NextSteps: []string{
-			fmt.Sprintf("Member %s (%s) is now active.", target.Handle, targetSHA),
-			"Run `propagate config pull` to update local propagate.yaml.",
-		},
+		NextSteps:      nextSteps,
 	}, nil
 }
 

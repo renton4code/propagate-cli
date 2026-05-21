@@ -259,28 +259,37 @@ func runTeamJoin(opts teamJoinOptions, streams Streams) (TeamJoinResult, error) 
 	}
 
 	if inviteMeta != nil && inviteMeta.PreApproved {
-		member := config.Member{
-			Handle:              summary.Handle,
-			PublicKeySHA:        summary.PublicKeySHA,
-			SigningPublicKey:    summary.SigningPublicKey,
-			EncryptionPublicKey: summary.EncryptionPublicKey,
-			Management:          opts.RequestedManagement,
-			Scopes:              requestedScopes,
-		}
-		nextConfig, err := config.RenderWithApprovedMember(project, member)
-		if err != nil {
-			if errors.Is(err, config.ErrAlreadyMember) {
-				return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "This identity is already an active team member", err, "Run `propagate team status` to inspect current membership.")
-			}
-			return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "Cannot add member to propagate.yaml", err)
-		}
 		if opts.DryRun {
 			result.Status = "dry_run"
+			result.PreApproved = true
 			result.NextSteps = []string{"Re-run without `--dry-run` to complete the join."}
 			return result, nil
 		}
-		if err := config.WriteRaw(configPath, nextConfig); err != nil {
-			return TeamJoinResult{}, commandError(ExitPartialLocalFailure, "partial_local_failure", "Could not write member to propagate.yaml", err)
+		pullResult, pullErr := runConfigPull(configPullOptions{
+			globalOptions: opts.globalOptions,
+			Yes:           true,
+		}, streams)
+		if pullErr != nil {
+			member := config.Member{
+				Handle:              summary.Handle,
+				PublicKeySHA:        summary.PublicKeySHA,
+				SigningPublicKey:    summary.SigningPublicKey,
+				EncryptionPublicKey: summary.EncryptionPublicKey,
+				Management:          opts.RequestedManagement,
+				Scopes:              requestedScopes,
+			}
+			nextConfig, err := config.RenderWithApprovedMember(project, member)
+			if err != nil {
+				if errors.Is(err, config.ErrAlreadyMember) {
+					return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "This identity is already an active team member", err, "Run `propagate team status` to inspect current membership.")
+				}
+				return TeamJoinResult{}, commandError(ExitValidationError, "config_invalid", "Cannot add member to propagate.yaml", err)
+			}
+			if err := config.WriteRaw(configPath, nextConfig); err != nil {
+				return TeamJoinResult{}, commandError(ExitPartialLocalFailure, "partial_local_failure", "Could not write member to propagate.yaml", err)
+			}
+		} else {
+			result.Warnings = append(result.Warnings, pullResult.Warnings...)
 		}
 		result.PendingJoinAdded = true
 		result.PreApproved = true

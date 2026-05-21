@@ -1029,6 +1029,7 @@ func (s *MemoryStore) SubmitInvitePIN(_ context.Context, teamID string, inviteID
 				scope.envelopes[envelope.RecipientKeySHA] = envelope
 			}
 			team.revision++
+			appendMemberToMemorySnapshot(team, newMember)
 			member = &newMember
 			team.audit = append(team.audit, memoryAudit{
 				id:        fmt.Sprintf("audit_%05d", len(team.audit)+1),
@@ -1204,6 +1205,7 @@ func (s *MemoryStore) ApproveJoinRequest(_ context.Context, teamID string, publi
 		scope.envelopes[envelope.RecipientKeySHA] = envelope
 	}
 	team.revision++
+	appendMemberToMemorySnapshot(team, member)
 
 	team.audit = append(team.audit, memoryAudit{
 		id:        fmt.Sprintf("audit_%05d", len(team.audit)+1),
@@ -1216,6 +1218,7 @@ func (s *MemoryStore) ApproveJoinRequest(_ context.Context, teamID string, publi
 	return domain.ApproveJoinResult{
 		MemberPublicKeySHA: publicKeySHA,
 		ConfigRevision:     domain.RevisionString(team.revision),
+		ConfigHash:         team.configHash,
 	}, nil
 }
 
@@ -1267,4 +1270,38 @@ func setupTeamID(snapshot json.RawMessage) (string, error) {
 
 func isNoRows(err error) bool {
 	return errors.Is(err, ErrNotFound)
+}
+
+func appendMemberToMemorySnapshot(team *memoryTeam, member domain.Member) {
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(team.configSnapshot, &full); err != nil {
+		return
+	}
+	var members []snapshotMember
+	if raw, ok := full["members"]; ok {
+		_ = json.Unmarshal(raw, &members)
+	}
+	members = append(members, snapshotMember{
+		Handle:              member.Handle,
+		PublicKeySHA:        member.PublicKeySHA,
+		SigningPublicKey:    member.SigningPublicKey,
+		EncryptionPublicKey: member.EncryptionPublicKey,
+		Management:          member.Management,
+		Scopes:              member.Scopes,
+	})
+	membersJSON, err := json.Marshal(members)
+	if err != nil {
+		return
+	}
+	full["members"] = membersJSON
+	updated, err := json.Marshal(full)
+	if err != nil {
+		return
+	}
+	hash, err := domain.ConfigHash(updated)
+	if err != nil {
+		return
+	}
+	team.configSnapshot = updated
+	team.configHash = hash
 }

@@ -54,12 +54,12 @@ func (s *SQLStore) ApproveJoinRequest(ctx context.Context, teamID string, public
 	}
 	defer tx.Rollback()
 
-	var handle string
+	var handle, signingPublicKey, encryptionPublicKey string
 	err = tx.QueryRowContext(ctx, `
-		select handle from members
+		select handle, signing_public_key, encryption_public_key from members
 		where team_id = $1 and public_key_sha = $2 and status = 'pending'
 		for update
-	`, teamID, publicKeySHA).Scan(&handle)
+	`, teamID, publicKeySHA).Scan(&handle, &signingPublicKey, &encryptionPublicKey)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.ApproveJoinResult{}, ErrJoinRequestNotFound
@@ -111,13 +111,14 @@ func (s *SQLStore) ApproveJoinRequest(ctx context.Context, teamID string, public
 		}
 	}
 
-	_, err = tx.ExecContext(ctx, `update teams set revision = revision + 1 where id = $1`, teamID)
-	if err != nil {
-		return domain.ApproveJoinResult{}, err
-	}
-
-	var newRevision int
-	err = tx.QueryRowContext(ctx, `select revision from teams where id = $1`, teamID).Scan(&newRevision)
+	newRevision, configHash, err := appendMemberToConfigSnapshot(ctx, tx, teamID, request.OperationID, actor.PublicKeySHA, snapshotMember{
+		Handle:              handle,
+		PublicKeySHA:        publicKeySHA,
+		SigningPublicKey:    signingPublicKey,
+		EncryptionPublicKey: encryptionPublicKey,
+		Management:          request.GrantedManagement,
+		Scopes:              request.GrantedScopes,
+	})
 	if err != nil {
 		return domain.ApproveJoinResult{}, err
 	}
@@ -129,6 +130,7 @@ func (s *SQLStore) ApproveJoinRequest(ctx context.Context, teamID string, public
 	return domain.ApproveJoinResult{
 		MemberPublicKeySHA: publicKeySHA,
 		ConfigRevision:     domain.RevisionString(newRevision),
+		ConfigHash:         configHash,
 	}, nil
 }
 
