@@ -94,7 +94,7 @@ func TestEnvStatusShowsMaskedValuesAndMetadata(t *testing.T) {
 	if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
 		t.Fatalf("env status leaked plaintext\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 	}
-	for _, want := range []string{"API_TOKEN=s*******************n", "Last updated:", "Can read: true"} {
+	for _, want := range []string{"API_TOKEN=s**n", "Last updated:", "Can read: true"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, stdout.String())
 		}
@@ -164,7 +164,7 @@ func TestEnvStatusJSONOmitsMaskedValues(t *testing.T) {
 	if code != ExitSuccess {
 		t.Fatalf("env status JSON exit = %d, stderr:\n%s", code, stderr.String())
 	}
-	if strings.Contains(stdout.String(), secret) || strings.Contains(stdout.String(), "s*******************n") {
+	if strings.Contains(stdout.String(), secret) || strings.Contains(stdout.String(), "s**n") {
 		t.Fatalf("JSON output leaked plaintext or masked value:\n%s", stdout.String())
 	}
 	var result EnvStatusResult

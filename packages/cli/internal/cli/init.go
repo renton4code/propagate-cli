@@ -714,16 +714,7 @@ func initVariableLine(variable InitVariableSummary, scope string) string {
 }
 
 func initMaskValue(value string) string {
-	switch len(value) {
-	case 0:
-		return ""
-	case 1:
-		return "**"
-	case 2:
-		return value[:1] + "**"
-	default:
-		return value[:1] + "**" + value[len(value)-1:]
-	}
+	return envfile.Mask(value)
 }
 
 func initEncryptionLine(result InitResult) string {

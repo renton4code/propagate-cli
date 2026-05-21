@@ -327,11 +327,11 @@ func Mask(value string) string {
 	case 0:
 		return ""
 	case 1:
-		return "*"
+		return "**"
 	case 2:
-		return value[:1] + "*"
+		return value[:1] + "**"
 	default:
-		return value[:1] + strings.Repeat("*", len(value)-2) + value[len(value)-1:]
+		return value[:1] + "**" + value[len(value)-1:]
 	}
 }
 
