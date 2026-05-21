@@ -219,7 +219,7 @@ func revisionNumberOrZero(value string) (int, error) {
 func configStatusNextSteps(action string) []string {
 	switch action {
 	case "none":
-		return []string{"No config sync action is needed."}
+		return nil
 	case "push":
 		return []string{"Run `propagate config push` after reviewing local config changes."}
 	case "pull":
@@ -256,23 +256,40 @@ func renderConfigStatusResult(w io.Writer, jsonOutput bool, noColor bool, result
 		fmt.Fprintf(w, "Checked by: %s (%s)\n", result.Identity.Handle, result.Identity.PublicKeySHA)
 	}
 	fmt.Fprintf(w, "Local revision: %s\n", valueOrDash(result.LocalRevision))
-	fmt.Fprintf(w, "Cloud revision: %s\n", valueOrDash(result.CloudRevision))
-	fmt.Fprintf(w, "Local config hash: %s\n", valueOrDash(result.LocalConfigHash))
-	fmt.Fprintf(w, "Cloud config hash: %s\n", valueOrDash(result.CloudConfigHash))
-	if result.State != "" {
-		fmt.Fprintf(w, "State: %s\n", result.State)
+	if !configStatusInSync(result) {
+		fmt.Fprintf(w, "Cloud revision: %s\n", valueOrDash(result.CloudRevision))
+		fmt.Fprintf(w, "Local config hash: %s\n", valueOrDash(result.LocalConfigHash))
+		fmt.Fprintf(w, "Cloud config hash: %s\n", valueOrDash(result.CloudConfigHash))
+		if result.State != "" {
+			fmt.Fprintf(w, "State: %s\n", result.State)
+		}
+		if result.RecommendedAction != "" && result.RecommendedAction != "none" {
+			fmt.Fprintf(w, "Recommended action: %s\n", result.RecommendedAction)
+		}
 	}
-	if result.RecommendedAction != "" {
-		fmt.Fprintf(w, "Recommended action: %s\n", result.RecommendedAction)
+	if result.BackendStatus != "" && result.BackendStatus != "equal" && result.BackendStatus != "fetched" {
+		fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 	}
-	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
 	renderConfigStatusList(w, style, "Local-only changes", result.LocalOnlyChanges)
 	renderConfigStatusList(w, style, "Cloud-only changes", result.CloudOnlyChanges)
-	if len(result.SafeSummary) > 0 {
+	if !configStatusInSync(result) && len(result.SafeSummary) > 0 {
 		renderConfigStatusList(w, style, "Cloud summary", configStatusSafeSummaryLines(result.SafeSummary))
 	}
 	renderWarnings(w, style, result.Warnings)
 	renderNextSteps(w, style, result.NextSteps)
+}
+
+func configStatusInSync(result ConfigStatusResult) bool {
+	if result.Status != "success" {
+		return false
+	}
+	if result.State != "equal" {
+		return false
+	}
+	if len(result.LocalOnlyChanges) > 0 || len(result.CloudOnlyChanges) > 0 {
+		return false
+	}
+	return true
 }
 
 func renderConfigStatusHeadline(w io.Writer, style outputStyle, state string) {

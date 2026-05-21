@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"propagate/cli/internal/config"
 )
@@ -176,13 +177,16 @@ func renderStatusResult(w io.Writer, jsonOutput bool, noColor bool, result Statu
 	}
 
 	style := newOutputStyle(noColor)
+
+	if result.OK && statusFullyInSync(result) {
+		renderCompactStatus(w, style, result)
+		return
+	}
+
 	renderCommandTitle(w, style, "Status", false)
-	switch {
-	case result.OK:
-		renderOK(w, style, "Unified status complete.")
-	case statusHasSectionResults(result):
+	if statusHasSectionResults(result) {
 		renderWarning(w, style, "Unified status incomplete; available sections are shown.")
-	default:
+	} else {
 		renderWarning(w, style, "Unified status failed.")
 	}
 
@@ -198,6 +202,127 @@ func renderStatusResult(w io.Writer, jsonOutput bool, noColor bool, result Statu
 		fmt.Fprintln(w)
 		renderEnvStatusResult(w, false, noColor, *result.Env)
 	}
+}
+
+func statusFullyInSync(result StatusResult) bool {
+	if result.Config == nil || result.Team == nil || result.Env == nil {
+		return false
+	}
+	if !configStatusInSync(*result.Config) {
+		return false
+	}
+	if !teamStatusInSync(*result.Team) {
+		return false
+	}
+	if result.Env.Status != "success" && result.Env.Status != "no_change" {
+		return false
+	}
+	if result.Env.ConfigStale {
+		return false
+	}
+	if envStatusHasLocalDrift(result.Env.Variables) {
+		return false
+	}
+	return true
+}
+
+func renderCompactStatus(w io.Writer, style outputStyle, result StatusResult) {
+	renderCommandTitle(w, style, "Status", false)
+
+	configRes := result.Config
+	teamRes := result.Team
+	envRes := result.Env
+
+	teamLine := ""
+	if configRes.TeamName != "" {
+		teamLine = fmt.Sprintf("%s (%s)", configRes.TeamName, configRes.TeamID)
+	} else if configRes.TeamID != "" {
+		teamLine = configRes.TeamID
+	}
+
+	youLine := ""
+	if configRes.Identity != nil {
+		youLine = configRes.Identity.Handle
+		if youLine == "" {
+			youLine = configRes.Identity.PublicKeySHA
+		}
+		if teamRes.CurrentManagement {
+			youLine += " [management]"
+		}
+	}
+
+	configLine := fmt.Sprintf("%s (in sync)", valueOrDash(configRes.LocalRevision))
+
+	scopeLine := result.Scope
+	if envRes.CanRead {
+		scopeLine += " (read access)"
+	} else {
+		scopeLine += " (no read access)"
+	}
+
+	labelWidth := 7 // "Config:" / "Scope:" / "Team:" / "You:"
+	printRow := func(label, value string) {
+		if value == "" {
+			return
+		}
+		fmt.Fprintf(w, "%-*s %s\n", labelWidth, label+":", value)
+	}
+	printRow("Team", teamLine)
+	printRow("You", youLine)
+	printRow("Config", configLine)
+	printRow("Scope", scopeLine)
+
+	handleBySHA := teamHandleBySHA(teamRes.Members)
+	if countTeamMembers(teamRes.Members) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, style.bold("Members"))
+		youSHA := ""
+		if configRes.Identity != nil {
+			youSHA = configRes.Identity.PublicKeySHA
+		}
+		for _, role := range orderedTeamRoles(teamRes.Members) {
+			fmt.Fprintf(w, "  %s\n", role)
+			for _, member := range teamRes.Members[role] {
+				label := compactMemberLabel(member.Handle, member.PublicKeySHA)
+				if youSHA != "" && member.PublicKeySHA == youSHA {
+					label += " (you)"
+				}
+				if member.Status != "" && member.Status != "active" {
+					label += " [" + member.Status + "]"
+				}
+				fmt.Fprintf(w, "    %s\n", label)
+			}
+		}
+	}
+
+	if len(envRes.Variables) > 0 {
+		fmt.Fprintln(w)
+		header := fmt.Sprintf("Variables (%d", len(envRes.Variables))
+		if envRes.LastUpdated != nil && envRes.LastUpdated.At != "" {
+			header += ", last update " + formatStatusTimestamp(envRes.LastUpdated.At)
+			if envRes.LastUpdated.By != "" {
+				header += " by " + compactMemberLabel(handleBySHA[envRes.LastUpdated.By], envRes.LastUpdated.By)
+			}
+		}
+		header += ")"
+		fmt.Fprintln(w, style.bold(header))
+
+		nameWidth, valueWidth := 0, 0
+		for _, v := range envRes.Variables {
+			if len(v.Name) > nameWidth {
+				nameWidth = len(v.Name)
+			}
+			if len(v.MaskedValue) > valueWidth {
+				valueWidth = len(v.MaskedValue)
+			}
+		}
+		for _, v := range envRes.Variables {
+			fmt.Fprintf(w, "  %-*s  %-*s  %s\n", nameWidth, v.Name, valueWidth, v.MaskedValue, v.Path)
+		}
+	}
+
+	fmt.Fprintln(w)
+	renderOK(w, style, "Everything in sync.")
 }
 
 func renderStatusErrors(w io.Writer, noColor bool, errors []StatusSectionError) {
@@ -221,6 +346,34 @@ func statusExitCode(errors []StatusSectionError) int {
 		}
 	}
 	return ExitSuccess
+}
+
+func compactMemberLabel(handle, sha string) string {
+	handle = strings.TrimSpace(handle)
+	if handle != "" {
+		return handle
+	}
+	return sha
+}
+
+func teamHandleBySHA(members map[string][]TeamMember) map[string]string {
+	out := map[string]string{}
+	for _, group := range members {
+		for _, m := range group {
+			if m.Handle != "" {
+				out[m.PublicKeySHA] = m.Handle
+			}
+		}
+	}
+	return out
+}
+
+func formatStatusTimestamp(value string) string {
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	return t.Local().Format("2006-01-02 15:04")
 }
 
 func printStatusHelp(w io.Writer) {

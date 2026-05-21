@@ -218,7 +218,7 @@ func runTeamStatus(opts teamStatusOptions, streams Streams) (TeamStatusResult, e
 	result.AuditAvailable = true
 	result.BackendStatus = "fetched"
 	if len(result.LastPulls) == 0 {
-		result.NextSteps = []string{"No env pull activity has been recorded yet."}
+		result.NeverPulled = nil
 	}
 	return result, nil
 }
@@ -457,11 +457,17 @@ func renderTeamStatusResult(w io.Writer, jsonOutput bool, noColor bool, result T
 		fmt.Fprintf(w, "Current access: management\n")
 	}
 	fmt.Fprintf(w, "Local revision: %s\n", valueOrDash(result.LocalRevision))
-	fmt.Fprintf(w, "Cloud revision: %s\n", valueOrDash(result.CloudRevision))
-	fmt.Fprintf(w, "Local config hash: %s\n", valueOrDash(result.LocalConfigHash))
-	fmt.Fprintf(w, "Cloud config hash: %s\n", valueOrDash(result.CloudConfigHash))
-	fmt.Fprintf(w, "Audit available: %t\n", result.AuditAvailable)
-	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
+	if !teamStatusInSync(result) {
+		fmt.Fprintf(w, "Cloud revision: %s\n", valueOrDash(result.CloudRevision))
+		fmt.Fprintf(w, "Local config hash: %s\n", valueOrDash(result.LocalConfigHash))
+		fmt.Fprintf(w, "Cloud config hash: %s\n", valueOrDash(result.CloudConfigHash))
+	}
+	if !result.AuditAvailable {
+		fmt.Fprintf(w, "Audit available: %t\n", result.AuditAvailable)
+	}
+	if result.BackendStatus != "" && result.BackendStatus != "fetched" {
+		fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
+	}
 
 	renderTeamMembers(w, style, result.Members)
 	if len(result.PendingOrRecentAccess) > 0 {
@@ -517,6 +523,22 @@ func renderNeverPulled(w io.Writer, style outputStyle, members []TeamMember) {
 	for _, member := range members {
 		fmt.Fprintf(w, "- %s\n", memberLabel(member.Handle, member.PublicKeySHA))
 	}
+}
+
+func teamStatusInSync(result TeamStatusResult) bool {
+	if result.Status != "success" {
+		return false
+	}
+	if result.LocalRevision == "" || result.CloudRevision == "" {
+		return false
+	}
+	if result.LocalRevision != result.CloudRevision {
+		return false
+	}
+	if result.LocalConfigHash != "" && result.CloudConfigHash != "" && result.LocalConfigHash != result.CloudConfigHash {
+		return false
+	}
+	return true
 }
 
 func renderTeamStatusList(w io.Writer, style outputStyle, label string, values []string) {

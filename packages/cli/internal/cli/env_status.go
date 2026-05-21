@@ -413,30 +413,58 @@ func renderEnvStatusResult(w io.Writer, jsonOutput bool, noColor bool, result En
 	fmt.Fprintf(w, "Can read: %t\n", result.CanRead)
 	if len(result.Variables) > 0 {
 		fmt.Fprintln(w, style.bold("Variables:"))
-		for _, item := range result.Variables {
-			display := item.Name
+		nameValueWidth := 0
+		nameValues := make([]string, len(result.Variables))
+		for i, item := range result.Variables {
+			nv := item.Name
 			if item.MaskedValue != "" {
-				display += "=" + item.MaskedValue
+				nv += "=" + item.MaskedValue
 			}
+			nameValues[i] = nv
+			if len(nv) > nameValueWidth {
+				nameValueWidth = len(nv)
+			}
+		}
+		for i, item := range result.Variables {
+			line := "  - " + nameValues[i]
 			if item.Path != "" {
-				display += " (" + item.Path + ")"
+				pad := nameValueWidth - len(nameValues[i])
+				if pad < 0 {
+					pad = 0
+				}
+				line += strings.Repeat(" ", pad) + "  " + item.Path
 			}
-			if item.LocalState != "" {
-				display += " [" + item.LocalState + "]"
+			if marker := envStatusLocalStateMarker(item.LocalState); marker != "" {
+				line += " " + marker
 			}
-			fmt.Fprintf(w, "  - %s\n", display)
+			fmt.Fprintln(w, line)
 		}
 	}
 	if result.LastUpdated != nil && result.LastUpdated.At != "" {
-		fmt.Fprintf(w, "Last updated: %s", result.LastUpdated.At)
+		fmt.Fprintf(w, "Last updated: %s", formatStatusTimestamp(result.LastUpdated.At))
 		if result.LastUpdated.By != "" {
 			fmt.Fprintf(w, " by %s", result.LastUpdated.By)
 		}
 		fmt.Fprintln(w)
 	}
-	fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
+	if result.BackendStatus != "" && result.BackendStatus != "fetched" {
+		fmt.Fprintf(w, "Backend: %s\n", result.BackendStatus)
+	}
 	renderWarnings(w, style, result.Warnings)
 	renderNextSteps(w, style, result.NextSteps)
+}
+
+func envStatusLocalStateMarker(state string) string {
+	switch state {
+	case "different":
+		return "[drift]"
+	case "missing":
+		return "[missing locally]"
+	case "undeclared":
+		return "[undeclared]"
+	default:
+		return ""
+	}
 }
 
 func printEnvStatusHelp(w io.Writer) {

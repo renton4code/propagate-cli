@@ -1,4 +1,3 @@
-- Improve status command UX, now it's too verbose and repetitive
 - When developer joins via quickstart (config already exists) we should avoid step of adding AGENTS.md
 - Review AGENTS.md (now it's low quality)
 - In pin codes avoid letter "O" for confusion with zero
