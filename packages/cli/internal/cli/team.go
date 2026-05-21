@@ -93,7 +93,7 @@ func runTeamJoinCommand(args []string, global globalOptions, streams Streams) in
 	addGlobalFlags(fs, &opts.globalOptions)
 	fs.StringVar(&opts.Handle, "handle", "", "handle to store with a new local identity")
 	fs.BoolVar(&opts.RequestedManagement, "management", false, "request management access for config changes")
-	fs.Var(&opts.RequestedScopes, "scope", "requested scope, optionally as scope=permission; may be repeated")
+	fs.Var(&opts.RequestedScopes, "scope", "requested scope as scope=read|write; may be repeated")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "show what would happen without writing propagate.yaml")
 	fs.BoolVar(&opts.IncludeInit, "init", false, "run existing-project init before adding the join request")
 	fs.BoolVar(&opts.InitAgentGuidance, "agent-guidance", false, "with --init, create or update generic AGENTS.md Propagate guidance")

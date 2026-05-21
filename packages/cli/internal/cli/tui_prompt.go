@@ -128,19 +128,15 @@ func (m choicePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "esc":
 		m.canceled = true
 		return m, tea.Quit
-	case "up", "k", "shift+tab":
+	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
-	case "down", "j", "tab":
+	case "down":
 		if m.cursor < len(m.choices)-1 {
 			m.cursor++
 		}
-	case "home":
-		m.cursor = 0
-	case "end":
-		m.cursor = len(m.choices) - 1
-	case "enter", " ":
+	case "enter":
 		return m.submit()
 	default:
 		shortcut := strings.ToLower(key.String())
@@ -164,25 +160,19 @@ func (m multiChoicePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "esc":
 		m.canceled = true
 		return m, tea.Quit
-	case "up", "k", "shift+tab":
+	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
-	case "down", "j", "tab":
+	case "down":
 		if m.cursor < len(m.choices)-1 {
 			m.cursor++
 		}
-	case "home":
-		m.cursor = 0
-	case "end":
-		m.cursor = len(m.choices) - 1
 	case " ":
 		if len(m.choices) > 0 {
 			m.choices[m.cursor].Selected = !m.choices[m.cursor].Selected
 			m.errText = ""
 		}
-	case "a", "A":
-		m.toggleAll()
 	case "enter":
 		return m.submit()
 	}
@@ -195,67 +185,34 @@ func (m accessPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	maxCursor := len(m.scopes)
+	submitCursor := len(m.scopes) + 1
 	switch key.String() {
 	case "ctrl+c", "esc":
 		m.canceled = true
 		return m, tea.Quit
-	case "up", "k", "shift+tab":
+	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
-	case "down", "j", "tab":
-		if m.cursor < maxCursor {
+	case "down":
+		if m.cursor < submitCursor {
 			m.cursor++
 		}
-	case "home":
-		m.cursor = 0
-	case "end":
-		m.cursor = maxCursor
 	case " ":
 		m.errText = ""
-		if m.cursor == 0 {
+		switch {
+		case m.cursor == 0:
 			m.management = !m.management
-		} else {
+		case m.cursor <= len(m.scopes):
 			m.scopes[m.cursor-1].Permission = nextAccessPermission(m.scopes[m.cursor-1].Permission)
-		}
-	case "left", "h":
-		m.errText = ""
-		if m.cursor > 0 {
-			m.scopes[m.cursor-1].Permission = previousAccessPermission(m.scopes[m.cursor-1].Permission)
-		}
-	case "right", "l":
-		m.errText = ""
-		if m.cursor > 0 {
-			m.scopes[m.cursor-1].Permission = nextAccessPermission(m.scopes[m.cursor-1].Permission)
-		}
-	case "m", "M":
-		m.management = !m.management
-		m.errText = ""
-	case "n", "N":
-		m.errText = ""
-		if m.cursor == 0 {
-			m.management = false
-		} else {
-			m.scopes[m.cursor-1].Permission = "none"
-		}
-	case "r", "R":
-		if m.cursor > 0 {
-			m.scopes[m.cursor-1].Permission = "read"
-			m.errText = ""
-		}
-	case "w", "W":
-		if m.cursor > 0 {
-			m.scopes[m.cursor-1].Permission = "write"
-			m.errText = ""
-		}
-	case "y", "Y":
-		m.errText = ""
-		if m.cursor == 0 {
-			m.management = true
 		}
 	case "enter":
-		return m.submit()
+		if m.cursor == submitCursor {
+			return m.submit()
+		}
+		if m.cursor < submitCursor {
+			m.cursor++
+		}
 	}
 	return m, nil
 }
@@ -307,23 +264,6 @@ func (m accessPromptModel) submit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m *multiChoicePromptModel) toggleAll() {
-	if len(m.choices) == 0 {
-		return
-	}
-	allSelected := true
-	for _, choice := range m.choices {
-		if !choice.Selected {
-			allSelected = false
-			break
-		}
-	}
-	for idx := range m.choices {
-		m.choices[idx].Selected = !allSelected
-	}
-	m.errText = ""
-}
-
 func (m choicePromptModel) View() string {
 	var b strings.Builder
 	if m.title != "" {
@@ -355,7 +295,7 @@ func (m choicePromptModel) View() string {
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString("Use arrow keys, shortcuts, or enter. Esc cancels.\n")
+	b.WriteString("↑/↓ move · Enter confirm · Esc cancel\n")
 	return b.String()
 }
 
@@ -395,7 +335,7 @@ func (m multiChoicePromptModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("Space toggles. A toggles all. Enter submits. Esc cancels.\n")
+	b.WriteString("↑/↓ move · Space toggle · Enter confirm · Esc cancel\n")
 	return b.String()
 }
 
@@ -432,16 +372,23 @@ func (m accessPromptModel) View() string {
 		if m.cursor == idx+1 {
 			cursor = ">"
 		}
-		fmt.Fprintf(&b, "%s [%s] %s\n", cursor, normalizeAccessPermission(scope.Permission), scope.Name)
-		fmt.Fprintf(&b, "      Space/right cycles none, read, write. R/W/N choose directly.\n")
+		fmt.Fprintf(&b, "%s [%-5s] %s\n", cursor, normalizeAccessPermission(scope.Permission), scope.Name)
+		fmt.Fprintf(&b, "      Space cycles none → read → write.\n")
 	}
+
+	submitCursor := " "
+	if m.cursor == len(m.scopes)+1 {
+		submitCursor = ">"
+	}
+	fmt.Fprintf(&b, "\n%s [ Continue ]\n", submitCursor)
+
 	if m.errText != "" {
 		b.WriteString("\n")
 		b.WriteString(m.errText)
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("Space toggles/cycles. M toggles management. Enter submits. Esc cancels.\n")
+	b.WriteString("↑/↓ move · Space toggle/cycle · Enter advances (confirms on Continue) · Esc cancel\n")
 	return b.String()
 }
 
@@ -608,17 +555,6 @@ func nextAccessPermission(permission string) string {
 		return "write"
 	default:
 		return "none"
-	}
-}
-
-func previousAccessPermission(permission string) string {
-	switch normalizeAccessPermission(permission) {
-	case "write":
-		return "read"
-	case "read":
-		return "none"
-	default:
-		return "write"
 	}
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -62,9 +63,9 @@ func runTeamInviteCreate(args []string, global globalOptions, streams Streams) i
 	fs := flag.NewFlagSet("team invite", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addGlobalFlags(fs, &opts.globalOptions)
-	fs.StringVar(&opts.Label, "label", "", "human-readable name for this invite (required)")
-	fs.BoolVar(&opts.RequestedManagement, "management", false, "default management request for redeeming joiners")
-	fs.Var(&opts.RequestedScopes, "scope", "default scope permission scope=perm; may be repeated")
+	fs.StringVar(&opts.Label, "label", "", "human-readable name for this invite (prompted if omitted)")
+	fs.BoolVar(&opts.RequestedManagement, "management", false, "grant management to whoever redeems this invite")
+	fs.Var(&opts.RequestedScopes, "scope", "scope permission scope=read|write; may be repeated")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate locally without calling the API")
 
 	if err := fs.Parse(args); err != nil {
@@ -78,6 +79,10 @@ func runTeamInviteCreate(args []string, global globalOptions, streams Streams) i
 	if fs.NArg() != 0 {
 		cmdErr := commandError(ExitUsageError, "usage_error", "propagate team invite does not accept positional arguments", nil)
 		return renderError(streams.Err, opts.JSON, opts.NoColor, cmdErr)
+	}
+
+	if err := promptTeamInviteInputs(&opts, streams); err != nil {
+		return renderError(streams.Err, opts.JSON, opts.NoColor, err)
 	}
 
 	result, err := runTeamInviteCreateExec(opts, streams)
@@ -347,9 +352,74 @@ func runTeamInviteRevoke(args []string, global globalOptions, streams Streams) i
 	return ExitSuccess
 }
 
+func promptTeamInviteInputs(opts *teamInviteOptions, streams Streams) error {
+	if strings.TrimSpace(opts.Label) != "" && (opts.RequestedManagement || len(opts.RequestedScopes) > 0) {
+		return nil
+	}
+	reader := bufio.NewReader(streams.In)
+	if strings.TrimSpace(opts.Label) == "" {
+		label, err := promptRequired(reader, streams.In, streams.Out, opts.NonInteractive, "Invite label")
+		if err != nil {
+			return err
+		}
+		opts.Label = label
+	}
+	if opts.RequestedManagement || len(opts.RequestedScopes) > 0 {
+		return nil
+	}
+	if opts.NonInteractive || !promptCanUseTUI(streams.In, streams.Out) {
+		return nil
+	}
+	scopeNames, err := projectScopeNames(streams)
+	if err != nil || len(scopeNames) == 0 {
+		return nil
+	}
+	accessScopes := make([]tuiAccessScope, 0, len(scopeNames))
+	for _, name := range scopeNames {
+		accessScopes = append(accessScopes, tuiAccessScope{Name: name, Permission: "none"})
+	}
+	access, err := promptAccessTUI(streams.In, streams.Out,
+		"Access for "+opts.Label,
+		[]string{"Choose what this invite can do when redeemed."},
+		false, accessScopes, true)
+	if err != nil {
+		return err
+	}
+	opts.RequestedManagement = access.Management
+	opts.RequestedScopes = quickstartScopeFlagsFromMap(scopeNames, access.Scopes)
+	return nil
+}
+
+func projectScopeNames(streams Streams) ([]string, error) {
+	worktree, err := gitutil.Discover(streams.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	configPath, exists, err := config.ExistingPath(worktree.Root)
+	if err != nil || !exists {
+		return nil, err
+	}
+	project, err := config.ReadProject(configPath)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(project.Scopes))
+	for _, scope := range project.Scopes {
+		names = append(names, scope.Name)
+	}
+	return names, nil
+}
+
 func printTeamInviteHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  propagate team invite --label TEXT [flags]   create a PIN invite (management)")
+	fmt.Fprintln(w, "  propagate team invite [flags]                 create a PIN invite (management)")
 	fmt.Fprintln(w, "  propagate team invite list [flags]            list invites (management)")
 	fmt.Fprintln(w, "  propagate team invite revoke INVITE_ID        revoke an active invite (management)")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Create flags:")
+	fmt.Fprintln(w, "  --label VALUE       human-readable name for this invite (prompted if omitted)")
+	fmt.Fprintln(w, "  --management        grant management to whoever redeems this invite")
+	fmt.Fprintln(w, "  --scope VALUE       scope permission scope=read|write; may be repeated")
+	fmt.Fprintln(w, "  --dry-run           validate locally without calling the API")
+	fmt.Fprintln(w, "  --non-interactive   fail instead of prompting; --label becomes required")
 }

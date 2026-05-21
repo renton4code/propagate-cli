@@ -57,7 +57,7 @@ func runEnvSetCommand(args []string, global globalOptions, streams Streams) int 
 	fs := flag.NewFlagSet("env set", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addGlobalFlags(fs, &opts.globalOptions)
-	fs.StringVar(&opts.Scope, "scope", "", "scope to update")
+	fs.StringVar(&opts.Scope, "scope", "", "scope to update (prompted when omitted and multiple scopes exist)")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate and show the single-value update plan without uploading")
 	fs.BoolVar(&opts.Yes, "yes", false, "confirm uploading the encrypted value update")
 	fs.BoolVar(&opts.ValueStdin, "value-stdin", false, "read the single-line value from stdin instead of prompting")
