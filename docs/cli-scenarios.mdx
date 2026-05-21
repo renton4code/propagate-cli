@@ -45,7 +45,7 @@ If `propagate.yaml` already exists, `quickstart` switches to the developer onboa
 propagate quickstart --handle <handle>
 ```
 
-Interactive mode can prompt for the missing handle, agent guidance decision, join mode, invite selection, and PIN. Non-interactive runs should pass the same join flags they would pass to `propagate team join --init`, such as `--join-mode request` or `--join-mode invite --invite-id <id> --pin <pin>`.
+Interactive mode can prompt for the missing handle, join mode, invite selection, and PIN. Existing-project quickstart skips `AGENTS.md` guidance because the project has already been initialized by an admin. Non-interactive runs should pass the same join flags they would pass to `propagate team join --init`, such as `--join-mode request` or `--join-mode invite --invite-id <id> --pin <pin>`.
 
 ## Initialize A New Team Project
 

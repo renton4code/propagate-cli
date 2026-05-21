@@ -170,7 +170,7 @@ Orchestrator command for the first useful onboarding action in a repository. Whe
 5. Create one PIN-backed invite for the developer.
 6. Print the PIN once and tell the management member to share it through a trusted channel.
 7. Suggest committing reviewed `propagate.yaml` and agent guidance changes.
-8. If `propagate.yaml` already exists, skip the invite-label and setup-plus-invite flow and run the same existing-project init and join flow as `propagate team join --init`.
+8. If `propagate.yaml` already exists, skip the invite-label, setup-plus-invite, and `AGENTS.md` guidance flow and run the same existing-project init and join flow as `propagate team join --init`.
 
 Interactive quickstart must allow the user to fill missing setup fields, invite label, developer invite scopes, join mode, invite selection, and PIN through TUI or line prompts. Non-interactive new-project quickstart may default an omitted developer invite scope to `dev=read` when a `dev` scope exists.
 

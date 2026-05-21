@@ -168,8 +168,7 @@ func runQuickstartJoinExisting(opts quickstartOptions, streams Streams) (Quickst
 		RequestedScopes:     opts.RequestedScopes,
 		DryRun:              opts.DryRun,
 		IncludeInit:         true,
-		InitAgentGuidance:   opts.AgentGuidance,
-		InitSkipGuidance:    opts.SkipAgentGuidance,
+		InitSkipGuidance:    true,
 		JoinMode:            opts.JoinMode,
 		InviteID:            opts.InviteID,
 		InvitePIN:           opts.InvitePIN,
@@ -542,7 +541,7 @@ func printQuickstartHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  propagate quickstart [flags]")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "If propagate.yaml exists, quickstart behaves like `propagate team join --init`.")
+	fmt.Fprintln(w, "If propagate.yaml exists, quickstart behaves like `propagate team join --init` and skips AGENTS.md guidance.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  --handle VALUE           handle for a new local identity")

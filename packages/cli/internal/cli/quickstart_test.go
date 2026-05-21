@@ -429,8 +429,6 @@ func TestQuickstartWithExistingConfigRunsTeamJoinInit(t *testing.T) {
 		"quickstart",
 		"--handle", "bob@example.com",
 		"--api-url", "http://propagate.test",
-		"--non-interactive",
-		"--skip-agent-guidance",
 	}, Streams{
 		In:      strings.NewReader(""),
 		Out:     &stdout,
@@ -459,5 +457,11 @@ func TestQuickstartWithExistingConfigRunsTeamJoinInit(t *testing.T) {
 	}
 	if strings.Contains(output, "Developer invite created") || strings.Contains(output, "PIN:") {
 		t.Fatalf("quickstart existing-config output should not render invite creation:\n%s", output)
+	}
+	if strings.Contains(output, "Add Propagate guidance to AGENTS.md?") || strings.Contains(output, "Agent guidance:") {
+		t.Fatalf("quickstart existing-config output should not prompt for AGENTS.md guidance:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("quickstart existing-config should not create AGENTS.md by default: %v", err)
 	}
 }

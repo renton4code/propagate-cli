@@ -285,12 +285,12 @@ Inputs:
 | Team name | Required only for new project setup | Same behavior as `propagate init` |
 | Invite label | Yes | Prompt in interactive mode; required as `--invite-label` or `--label` in non-interactive mode |
 | Default management/scopes | Optional | Same semantics as `propagate team invite`; prompt in interactive mode when omitted for a new project |
-| Agent guidance targets | Optional | Same behavior as `propagate init` |
+| Agent guidance targets | Optional | Same behavior as `propagate init` for new projects; skipped for existing-project quickstart |
 | Join mode / invite PIN | Existing project only | Same behavior as `propagate team join --init` |
 
 For a new project, local reads and writes are the union of `propagate init` and `propagate team invite`. Non-dry-run new-project quickstart requires an API URL because the invite cannot be created in local-only mode. If invite scopes are omitted, interactive mode prompts for read scopes and non-interactive mode defaults to `dev=read` when a `dev` scope exists.
 
-For an existing project, local reads and writes match `propagate team join --init`. Interactive mode can prompt for missing handle, agent guidance, join mode, invite selection, and PIN.
+For an existing project, local reads and writes match `propagate team join --init`, except `AGENTS.md` guidance is skipped so joining developers are not prompted to add it. Interactive mode can prompt for missing handle, join mode, invite selection, and PIN.
 
 API calls:
 
