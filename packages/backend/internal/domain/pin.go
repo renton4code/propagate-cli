@@ -6,7 +6,10 @@ import (
 	"unicode"
 )
 
-// GenerateInvitePIN returns four decimal digits and one Latin letter (A–Z), e.g. "7391K".
+// invitePINLetters is A–Z without O, which is easily confused with digit zero.
+const invitePINLetters = "ABCDEFGHIJKLMNPQRSTUVWXYZ"
+
+// GenerateInvitePIN returns four decimal digits and one Latin letter (A–Z, excluding O), e.g. "7391K".
 func GenerateInvitePIN() (string, error) {
 	var digits [4]byte
 	if _, err := rand.Read(digits[:]); err != nil {
@@ -20,7 +23,7 @@ func GenerateInvitePIN() (string, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	out[4] = 'A' + b[0]%26
+	out[4] = invitePINLetters[b[0]%byte(len(invitePINLetters))]
 	return string(out), nil
 }
 

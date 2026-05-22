@@ -17,6 +17,18 @@ func TestNormalizeInvitePIN(t *testing.T) {
 	}
 }
 
+func TestGenerateInvitePINExcludesLetterO(t *testing.T) {
+	for i := 0; i < 500; i++ {
+		pin, err := GenerateInvitePIN()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pin[4] == 'O' {
+			t.Fatalf("generated pin %q contains letter O", pin)
+		}
+	}
+}
+
 func TestGenerateInvitePINShape(t *testing.T) {
 	pin, err := GenerateInvitePIN()
 	if err != nil {
