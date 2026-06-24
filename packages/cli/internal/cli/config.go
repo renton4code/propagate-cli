@@ -64,7 +64,6 @@ type JoinDecisionEntry struct {
 	Decision     string `json:"decision"`
 }
 
-
 func runConfigCommand(args []string, global globalOptions, streams Streams) int {
 	if len(args) == 0 {
 		printConfigHelp(streams.Out)
@@ -327,7 +326,6 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 	return result, nil
 }
 
-
 func buildNewScopeEnvelopesIfNeeded(ctx context.Context, client apiclient.Client, ident identity.Identity, project config.ParsedProject, target config.ParsedProject, status apiclient.ConfigStatusData) ([]apiclient.ScopeKeyEnvelope, error) {
 	cloudScopeCount, ok := safeSummaryInt(status.SafeSummary, "scopes_count")
 	if !ok || len(target.Scopes) <= cloudScopeCount {
@@ -424,7 +422,6 @@ func permissionRank(permission string) int {
 	}
 }
 
-
 func findMember(members []config.Member, publicKeySHA string) *config.Member {
 	for idx := range members {
 		if members[idx].PublicKeySHA == publicKeySHA {
@@ -441,18 +438,19 @@ func resolveAPIURL(flagValue string, workDirs ...string) string {
 	if value := strings.TrimSpace(os.Getenv("PROPAGATE_API_URL")); value != "" {
 		return value
 	}
-	return resolveAPIURLFromDotenv(workDirs...)
+	if value := resolveProfileAPIURL(); value != "" {
+		return value
+	}
+	return strings.TrimSpace(BakedDefaultAPIURL)
 }
 
-func resolveAPIURLFromDotenv(workDirs ...string) string {
-	for _, path := range apiURLDotenvCandidates(workDirs...) {
-		parsed, err := envfile.ParseAssignments(path)
-		if err != nil {
-			continue
-		}
-		if value := strings.TrimSpace(parsed.Values["PROPAGATE_API_URL"]); value != "" {
-			return value
-		}
+func resolveProfileAPIURL() string {
+	profile, err := identity.LoadProfile()
+	if err != nil {
+		return ""
+	}
+	if value := strings.TrimSpace(profile.DefaultAPIURL); value != "" {
+		return value
 	}
 	return ""
 }

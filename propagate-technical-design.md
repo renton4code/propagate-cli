@@ -302,13 +302,13 @@ The Go API should avoid duplicating CLI crypto logic except for request signatur
 
 ### 8.2 Cloud Run Runtime Configuration
 
-Cloud Run should be configured for low-cost, low-maintenance MVP hosting.
+Cloud Run should be configured for resource-efficient, low-maintenance MVP hosting.
 
 Recommended defaults:
 
 - Request-based billing.
 - Minimum instances set to zero.
-- Conservative maximum instance count to protect database connection limits and free-tier spend.
+- Conservative maximum instance count to protect database connection limits and hosted capacity.
 - Small memory and CPU allocation initially, with load testing before increasing.
 - Container concurrency high enough to amortize cold starts, but low enough to keep Postgres connections bounded.
 - No direct public database access from clients.

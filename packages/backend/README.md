@@ -15,11 +15,12 @@ Backend API module for the Propagate monorepo.
 - `GET /v1/teams/{team_id}/scopes/{scope}/env/status`
 - `POST /v1/teams/{team_id}/events/pull`
 - `GET /v1/teams/{team_id}/status`
+- `POST /v1/teams/{team_id}/invites`
+- `GET /v1/teams/{team_id}/invites`
+- `POST /v1/teams/{team_id}/invites/{invite_id}/revoke`
+- `GET /v1/teams/{team_id}/join/invites`
+- `POST /v1/teams/{team_id}/join/invites/{invite_id}/pin`
 - Schema migration in `migrations/0001_init_schema.sql`
-
-### Planned (documented, not implemented)
-
-PIN-backed team invites: create/list/revoke (admin), public joiner invite discovery, signed PIN verification with lockout. See repository root `propagate-api-implementation-guide.md` §9.12–9.16 and `propagate-prd.md` §6.2.1.
 
 `POST /v1/teams/setup` expects an Ed25519 signed request from the first admin identity. It validates that the submitted config snapshot is metadata-only, reserves a replay nonce, and records encrypted setup metadata through the storage layer.
 Protected team endpoints verify the active member's Ed25519 signature, reserve a replay nonce, and enforce role/scope permissions through the storage layer.

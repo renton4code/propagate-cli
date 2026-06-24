@@ -25,6 +25,8 @@ const (
 	ProfileFile  = "profile"
 )
 
+var DefaultAPIURL = "https://api.propagatecli.com/"
+
 type Identity struct {
 	FormatVersion        int    `json:"format_version"`
 	Handle               string `json:"handle"`
@@ -158,6 +160,38 @@ func Load() (Identity, error) {
 		return Identity{}, err
 	}
 	return ident, nil
+}
+
+func LoadProfile() (Profile, error) {
+	dir, err := Directory()
+	if err != nil {
+		return Profile{}, err
+	}
+	if err := validateDirectory(dir); err != nil {
+		return Profile{}, err
+	}
+
+	path := filepath.Join(dir, ProfileFile)
+	info, err := os.Stat(path)
+	if err != nil {
+		return Profile{}, fmt.Errorf("read profile metadata: %w", err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return Profile{}, fmt.Errorf("unsafe permissions on %s: expected owner-only file permissions", path)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Profile{}, fmt.Errorf("read profile: %w", err)
+	}
+	var profile Profile
+	if err := json.Unmarshal(data, &profile); err != nil {
+		return Profile{}, fmt.Errorf("parse profile: %w", err)
+	}
+	if profile.FormatVersion != 1 {
+		return Profile{}, fmt.Errorf("unsupported profile format version %d", profile.FormatVersion)
+	}
+	return profile, nil
 }
 
 func New(handle string, now time.Time) (Identity, error) {
@@ -313,6 +347,7 @@ func ensureProfile(path, handle string) error {
 	profile := Profile{
 		FormatVersion: 1,
 		Handle:        handle,
+		DefaultAPIURL: DefaultAPIURL,
 	}
 	payload, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {

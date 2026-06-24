@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"propagate/cli/internal/identity"
 )
 
 const Version = "0.1.0-dev"
+
+var BakedDefaultAPIURL = identity.DefaultAPIURL
 
 type Streams struct {
 	In      io.Reader

@@ -88,7 +88,7 @@ The local profile stores non-secret preferences.
 
 | Field | Purpose |
 | --- | --- |
-| `default_api_url` | Cloud Run API base URL |
+| `default_api_url` | Propagate API base URL override stored in the local profile |
 | `handle` | Current local display handle |
 | `last_seen_cli_version` | Diagnostics and migration prompts |
 | `preferred_output` | Optional default output mode |
@@ -205,11 +205,13 @@ Recommended global flags:
 | Flag | Behavior |
 | --- | --- |
 | `--json` | Render stable machine-readable output |
-| `--api-url` | Override Cloud Run API base URL |
+| `--api-url` | Override Propagate API base URL |
 | `--profile` | Select local profile when multi-profile support is added |
 | `--no-color` | Disable terminal color |
 | `--debug` | Enable safe debug diagnostics without env values |
 | `--non-interactive` | Refuse prompts and require explicit flags for risky actions |
+
+API URL resolution order is `--api-url`, then `PROPAGATE_API_URL`, then profile `default_api_url`, then the baked binary default `https://api.propagatecli.com/`.
 
 Command-specific write flags:
 
@@ -288,7 +290,7 @@ Inputs:
 | Agent guidance targets | Optional | Same behavior as `propagate init` for new projects; skipped for existing-project quickstart |
 | Join mode / invite PIN | Existing project only | Same behavior as `propagate team join --init` |
 
-For a new project, local reads and writes are the union of `propagate init` and `propagate team invite`. Non-dry-run new-project quickstart requires an API URL because the invite cannot be created in local-only mode. If invite scopes are omitted, interactive mode prompts for read scopes and non-interactive mode defaults to `dev=read` when a `dev` scope exists.
+For a new project, local reads and writes are the union of `propagate init` and `propagate team invite`. Non-dry-run new-project quickstart requires a resolved API URL because the invite cannot be created in local-only mode; OSS builds use the baked default unless a flag, environment value, or profile value overrides it. If invite scopes are omitted, interactive mode prompts for read scopes and non-interactive mode defaults to `dev=read` when a `dev` scope exists.
 
 For an existing project, local reads and writes match `propagate team join --init`, except `AGENTS.md` guidance is skipped so joining developers are not prompted to add it. Interactive mode can prompt for missing handle, join mode, invite selection, and PIN.
 
@@ -311,7 +313,7 @@ Success result:
 Failure behavior:
 
 - If invite label is missing in non-interactive mode, fail before setup writes.
-- If API URL is missing for a real run, fail before setup writes.
+- If every API URL source is empty for a real run, fail before setup writes.
 - If setup succeeds but invite creation fails, report the invite error; the project setup remains complete and reviewable.
 
 ### 6.1 `propagate init`

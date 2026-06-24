@@ -7,7 +7,9 @@ description: Current command surface, mutation behavior, and non-interactive usa
 
 This reference covers the current CLI commands implemented under `packages/cli/internal/cli`.
 
-Use `--help` on the root command, command groups, or leaf commands when usage is unclear. Use `--json` for machine-readable output, `--non-interactive` to fail instead of prompting, `--no-color` for plain terminal output, and `--api-url VALUE` when the Propagate API URL is not available from local configuration.
+Use `--help` on the root command, command groups, or leaf commands when usage is unclear. Use `--json` for machine-readable output, `--non-interactive` to fail instead of prompting, `--no-color` for plain terminal output, and `--api-url VALUE` to override the Propagate API URL.
+
+API URL resolution is `--api-url` flag, then `PROPAGATE_API_URL`, then identity profile `default_api_url`, then the baked default `https://api.propagatecli.com/`.
 
 ## Command Matrix
 

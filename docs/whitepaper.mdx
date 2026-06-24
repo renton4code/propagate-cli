@@ -1,0 +1,273 @@
+---
+title: Propagate Security Whitepaper
+description: Public security model, trust boundaries, workflows, limitations, and reviewer checklist.
+---
+
+# Propagate Security Whitepaper
+
+**Status:** Draft  
+**Audience:** developers, maintainers, security reviewers, and team leads evaluating Propagate  
+**License posture:** Propagate is free software under the MIT License, with no paid tier or commercial offering in this repository.
+
+## Executive Summary
+
+Propagate is a CLI-first tool for sharing environment variables across development teams without sending `.env` files through chat, email, tickets, or docs. It keeps secret values encrypted before they leave a developer machine, stores only ciphertext and safe metadata in the cloud, and uses a Git-backed `propagate.yaml` file to make team membership and access changes reviewable.
+
+The main security idea is simple:
+
+- Secret values are encrypted locally.
+- Scope keys are encrypted separately for each authorized member.
+- The cloud API stores ciphertext, metadata, envelopes, config revisions, and audit events.
+- A member decrypts values locally only when their local private key can open the relevant scope key envelope.
+
+Manual access approval is end-to-end encrypted: a management member's local CLI decrypts a scope key and encrypts a new envelope for the approved member. PIN invites are the explicit exception. They provide lower-friction onboarding, but during redemption the server briefly holds plaintext scope keys in memory while re-encrypting them for the invitee. That exception is documented as part of the trust model.
+
+## Goals And Non-Goals
+
+Propagate is designed to:
+
+- Replace ad hoc `.env` sharing with a reviewable CLI workflow.
+- Keep sensitive environment values out of Git, chat, docs, issue trackers, and audit logs.
+- Use public-key identity rather than password-based accounts for the MVP.
+- Make access decisions visible in `propagate.yaml`.
+- Support local development workflows with multiple scopes and env files.
+- Make safe behavior obvious for AI coding agents and terminal automation.
+
+Propagate does not try to provide, in the MVP:
+
+- SSO, browser login, or verified email identity.
+- CI/CD secret injection.
+- Production runtime agents.
+- Dedicated AI agent identities separate from a human user's local identity.
+- Automatic secret rotation.
+- A web dashboard.
+- A complex policy language beyond management access and per-scope permissions.
+
+## System Overview
+
+Propagate has four main parts:
+
+```text
+developer machine
+  |
+  | signed HTTPS requests, ciphertext, metadata
+  v
+Cloud Run API
+  |
+  | transactional storage and authorization state
+  v
+Supabase Postgres
+
+Git repository
+  |
+  v
+propagate.yaml: team metadata, public keys, safe declarations, pending access changes
+```
+
+The CLI performs the cryptographic work for normal secret operations. The API is a signed workflow boundary. The database stores encrypted values, encrypted scope key envelopes, config state, invite state, and audit metadata. Git stores `propagate.yaml`, which is intended to be reviewed like code.
+
+## Identity Model
+
+A Propagate user is identified by a public key, not by a password or email address. A handle such as `alice@example.com` is display metadata only; it is not an authorization input.
+
+Each local identity contains:
+
+| Item | Purpose |
+| --- | --- |
+| Signing private key | Signs API requests and config decisions |
+| Signing public key | Public identity material |
+| Encryption private key | Decrypts scope key envelopes |
+| Encryption public key | Receives encrypted scope key envelopes |
+| Public key SHA | Compact stable identifier shown in config and status |
+| Handle | Human-readable display metadata |
+
+Private identity material lives under `~/.propagate` and should be protected with owner-only file permissions. If a private key is lost, the cloud cannot recover it. The user must create a new identity, request access again, and have a management member approve new envelopes.
+
+## Encryption Model
+
+Propagate uses envelope encryption.
+
+1. Each scope, such as `dev`, `staging`, or `prod`, has a random symmetric scope key.
+2. Environment values in that scope are encrypted locally with the scope key.
+3. The scope key is encrypted to each authorized member's encryption public key.
+4. The API stores encrypted values and encrypted scope key envelopes.
+5. A member pulls an envelope and encrypted values, decrypts the scope key locally, then decrypts values locally.
+
+Sensitive variable declarations in `propagate.yaml` do not store raw values or raw plaintext hashes. They use keyed digests with an explicit algorithm prefix, for example:
+
+```yaml
+digest: "hmac-sha-256:v1:..."
+```
+
+The digest key is the scope key, so a committed config file is not useful for offline guessing unless the attacker also has scope key access. Variables are sensitive by default. A user must explicitly mark a declaration `non_sensitive` before Propagate can store a short literal or preview in `propagate.yaml`.
+
+## What Is Visible
+
+Propagate does not hide all metadata. The following information may be visible in Git-backed config, cloud metadata, audit records, or status output:
+
+- Team ID and team name.
+- Scope names.
+- Repo-relative env file paths.
+- Variable names.
+- Member handles.
+- Public key fingerprints and public keys.
+- Per-scope access grants.
+- Config revisions.
+- Counts of variables pushed, pulled, added, changed, removed, approved, or declined.
+- Timestamps and operation IDs.
+
+The following must not be stored in plaintext in config, logs, audit events, or cloud plaintext columns:
+
+- Sensitive env values.
+- Masked env values.
+- Raw plaintext hashes.
+- Private keys.
+- Access tokens or cloud credentials.
+- Prompt text or AI conversation content.
+
+If a team considers variable names or env file paths sensitive, it should treat that as a known metadata exposure in the current design.
+
+## `propagate.yaml`
+
+`propagate.yaml` is the reviewable project config. It is intended to be committed to Git and used in pull requests for access review.
+
+It can contain:
+
+- Config format version.
+- Team ID, team name, and cloud revision.
+- Scopes and env file mappings.
+- Variable declarations without sensitive values.
+- Member public identity material.
+- Management bit and per-scope permissions.
+- Pending join requests and access decisions.
+- Non-secret history of resolved requests.
+
+It must not contain sensitive plaintext, masked values, private material, raw plaintext hashes, tokens, or unmarked value-like examples. Config validation rejects these shapes so a bad edit does not silently become accepted team state.
+
+## Request Signing And API Trust
+
+Protected API requests are signed by the caller's local signing key. The signed material includes the method, path, body digest, timestamp, nonce, public key SHA, and CLI version. The API verifies signatures, rejects stale timestamps, rejects replayed nonces, resolves membership from database state, and evaluates permissions before applying any change.
+
+Authorization is derived from server-side membership and scope state. The API must not trust client-provided claims such as "I am management" or "I have write access" without checking database state.
+
+In normal end-to-end encrypted operations, the API is trusted for:
+
+- Availability.
+- Authentication and authorization checks.
+- Config revision and secret version conflict detection.
+- Storage of ciphertext and envelopes.
+- Audit history.
+
+The API is not trusted with sensitive plaintext env values or plaintext scope keys, except for the PIN invite relay described below.
+
+## Core Workflows
+
+### First Project Setup
+
+A management member runs `propagate init` or the new-project `propagate quickstart` flow. The CLI creates or loads a local identity, scans candidate env files inside the Git worktree, lets the user choose scopes and env mappings, creates scope keys, encrypts selected values locally, and sends a signed setup request with ciphertext and envelopes.
+
+After the cloud accepts setup, the CLI writes `propagate.yaml` with safe metadata and declarations. The user commits that config so the team has a reviewable baseline.
+
+### Git-Mediated Join
+
+The git-mediated join path is the strict end-to-end encrypted path.
+
+1. A developer creates or loads a local identity.
+2. The developer submits a join request with public identity material and requested scopes.
+3. The request appears as safe metadata in config/status.
+4. A management member reviews the request.
+5. On approval, the management member's CLI decrypts current scope keys locally and encrypts new envelopes for the joiner.
+6. The signed config push publishes the approved state and envelopes.
+
+The server never needs plaintext scope keys in this path.
+
+### PIN Invite Join
+
+PIN invites trade some strictness for a smoother onboarding path. A management member creates an invite with a label and pre-approved access. The CLI gets the server relay public key, decrypts selected scope keys locally, encrypts those scope keys to the relay public key, and uploads the relay-encrypted bundle. The API stores a PIN verifier, not the plaintext PIN, and returns the PIN once.
+
+During redemption:
+
+1. The joiner selects the invite and submits the PIN with their public identity material.
+2. The server verifies the PIN.
+3. The server decrypts the relay-encrypted scope keys in memory.
+4. The server re-encrypts the scope keys to the joiner's encryption public key.
+5. The server stores active envelopes and member state.
+6. Relay-encrypted invite material is no longer needed after redemption.
+
+This is the one documented flow where plaintext scope keys briefly exist in server memory. Mitigations include short invite lifetimes, one-time PIN display, failed-attempt lockout, rate limits, restricted relay-key access, and revocation of unused invites.
+
+### `propagate run` Versus `propagate env pull`
+
+`propagate run` is the preferred local development path when tooling allows it. The CLI decrypts values locally and injects them only into the child process environment. It does not write `.env` files.
+
+`propagate env pull` is the compatibility path for tools that require files on disk. It decrypts values locally and merges them into configured env files after preview and confirmation. This is familiar, but less safe because plaintext values remain on disk until the user or tooling removes them.
+
+Neither command sanitizes child process output. Users and agents should not run commands such as `env` or `printenv` under `propagate run` unless they intentionally want to expose environment variables.
+
+### Env Push And Conflict Handling
+
+`propagate env push` encrypts local env file changes and uploads new ciphertext versions. Mutating operations use operation IDs for idempotency and expected revisions or version IDs for conflict detection.
+
+If another user changed the same config or secret first, the server rejects stale writes. The CLI should direct the user to pull, review, and retry rather than overwriting silently.
+
+## AI Agent Boundary
+
+Propagate can generate an `AGENTS.md` guidance block so coding agents know how to use the CLI safely in a repository. That guidance tells agents not to paste env values into chat, docs, tests, commits, pull requests, or issue trackers, and it prefers dry-run previews before write-capable operations.
+
+Agent guidance is not access control. An agent that can read local files or terminal output may still see what the user allows it to see. Enforcement remains in the CLI, local key material, signed API requests, and server-side permission checks. In the MVP, agent-assisted commands use the human user's local Propagate identity.
+
+## Security Limitations
+
+### Revocation Is Not Time Travel
+
+Revoking a member prevents future envelope and secret access through Propagate. It cannot erase values the member already pulled, copied, logged, or wrote to disk. Meaningful revocation should include scope key rotation and value re-encryption for remaining authorized members.
+
+### Lost Keys Cannot Be Recovered
+
+The cloud stores public keys and encrypted envelopes, not private keys. If a local private key is lost, the user needs a new identity and new access approval.
+
+### Handles Are Not Verified Identity
+
+Handles are display metadata. Duplicate, stale, or misleading handles are possible. Security-sensitive decisions should compare public key SHAs and review how the key was introduced.
+
+### Metadata Remains Metadata
+
+Variable names, env file paths, handles, scope names, and access grants are visible. Propagate protects env values, not every bit of project structure.
+
+### Local Machines Matter
+
+If an attacker controls a developer machine while values are being decrypted or used, Propagate cannot prevent that attacker from reading local files, process environments, terminal output, or private keys.
+
+### Install Trust
+
+The recommended installer may use:
+
+```bash
+curl -fsSL https://propagatecli.com/install.sh | sh
+```
+
+That is a trust decision. Security-conscious users should inspect the script or manually download GitHub Release artifacts and verify `SHA256SUMS`. Release signing and attestations should be considered for hardening.
+
+## Reviewer Checklist
+
+Use this checklist when reviewing a Propagate release or deployment:
+
+- Does the repository contain an MIT `LICENSE` file?
+- Does `propagate.yaml` contain only safe metadata and declarations?
+- Are sensitive declarations stored as keyed digests, not literals or raw hashes?
+- Are local private key files owner-only?
+- Do protected API routes verify request signatures before data access?
+- Are nonces or equivalent replay protections enforced?
+- Are permissions derived from stored membership state?
+- Do audit records exclude values, masked values, prompts, conversation text, private keys, and tokens?
+- Do env pulls require preview and confirmation before writing plaintext files?
+- Do write operations use expected revisions or secret version preconditions?
+- Is PIN invite relay behavior documented and limited to invite redemption?
+- Are unused or failed invites revocable and rate-limited?
+- Are agent instructions treated as guidance rather than authorization?
+
+## Related Docs
+
+- [CLI command reference](cli-command-reference.mdx)
+- [CLI scenarios](cli-scenarios.mdx)
+- [Open source plan](open-source-plan.md)

@@ -436,6 +436,7 @@ func TestInitMaskValueAlwaysUsesTwoStars(t *testing.T) {
 
 func initGitRepo(t *testing.T) string {
 	t.Helper()
+	withBakedDefaultAPIURL(t, "")
 	dir := t.TempDir()
 	cmd := exec.Command("git", "init")
 	cmd.Dir = dir

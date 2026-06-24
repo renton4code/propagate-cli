@@ -4,10 +4,11 @@ Propagate is organized as a Go monorepo.
 
 ## Product documentation
 
-- [propagate-prd.md](propagate-prd.md) — requirements (includes planned **PIN-backed team invites**).
+- [propagate-prd.md](propagate-prd.md) — requirements, including **PIN-backed team invites**.
 - [propagate-technical-design.md](propagate-technical-design.md) — architecture and data model.
 - [propagate-api-implementation-guide.md](propagate-api-implementation-guide.md) — HTTP contracts.
 - [propagate-cli-implementation-guide.md](propagate-cli-implementation-guide.md) — CLI command behaviors.
+- [docs/whitepaper.mdx](docs/whitepaper.mdx) — public security model and trust boundaries.
 
 ## Layout
 
@@ -34,9 +35,10 @@ cp packages/backend/.env.example packages/backend/.env
 docker compose up --build
 ```
 
-The local API URL lives in `packages/backend/.env`. CLI commands that contact
-the API read `PROPAGATE_API_URL` from that file, and the backend loads its
-runtime config from the same file when run on the host, so you do not need to
+The CLI defaults to the free hosted API at `https://api.propagatecli.com/`.
+For local development, `PROPAGATE_API_URL` in `packages/backend/.env`
+overrides that default before commands contact the API, and the backend loads
+its runtime config from the same file when run on the host. You do not need to
 export values manually during local development.
 
 ```bash
@@ -62,3 +64,9 @@ Reset the local database with:
 ```bash
 docker compose down -v
 ```
+
+## License
+
+Propagate is free software released under the [MIT License](LICENSE). The
+project has no paid tier, subscription plan, or commercial offering in this
+repo.

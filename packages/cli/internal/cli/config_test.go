@@ -17,26 +17,50 @@ import (
 	"propagate/cli/internal/identity"
 )
 
-
-func TestResolveAPIURLReadsBackendDotenv(t *testing.T) {
+func TestResolveAPIURLUsesBakedDefault(t *testing.T) {
 	repo := initGitRepo(t)
-	backendDir := filepath.Join(repo, "packages", "backend")
-	if err := os.MkdirAll(backendDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(backendDir, ".env"), []byte("PROPAGATE_API_URL=http://localhost:8080\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+	withBakedDefaultAPIURL(t, "https://api.propagatecli.com/")
 
 	got := resolveAPIURL("", repo)
-	if got != "http://localhost:8080" {
-		t.Fatalf("resolveAPIURL() = %q, want http://localhost:8080", got)
+	if got != "https://api.propagatecli.com/" {
+		t.Fatalf("resolveAPIURL() = %q, want https://api.propagatecli.com/", got)
+	}
+}
+
+func TestResolveAPIURLReadsProfileBeforeBakedDefault(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+	withBakedDefaultAPIURL(t, "https://api.propagatecli.com/")
+
+	profileDir := filepath.Join(home, ".propagate")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := []byte("{\"format_version\":1,\"handle\":\"alice@example.com\",\"default_api_url\":\"http://profile.test\"}\n")
+	if err := os.WriteFile(filepath.Join(profileDir, identity.ProfileFile), profile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := resolveAPIURL("", repo); got != "http://profile.test" {
+		t.Fatalf("profile resolveAPIURL() = %q", got)
 	}
 }
 
 func TestResolveAPIURLPrecedence(t *testing.T) {
 	repo := initGitRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, ".env"), []byte("PROPAGATE_API_URL=http://dotenv.test\n"), 0o600); err != nil {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	withBakedDefaultAPIURL(t, "https://api.propagatecli.com/")
+
+	profileDir := filepath.Join(home, ".propagate")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := []byte("{\"format_version\":1,\"handle\":\"alice@example.com\",\"default_api_url\":\"http://profile.test\"}\n")
+	if err := os.WriteFile(filepath.Join(profileDir, identity.ProfileFile), profile, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,6 +70,29 @@ func TestResolveAPIURLPrecedence(t *testing.T) {
 	}
 	if got := resolveAPIURL("", repo); got != "http://env.test" {
 		t.Fatalf("env resolveAPIURL() = %q", got)
+	}
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+	if got := resolveAPIURL("", repo); got != "http://profile.test" {
+		t.Fatalf("profile resolveAPIURL() = %q", got)
+	}
+}
+
+func TestLoadLocalDotenvCanProvideEnvOverride(t *testing.T) {
+	repo := initGitRepo(t)
+	backendDir := filepath.Join(repo, "packages", "backend")
+	if err := os.MkdirAll(backendDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backendDir, ".env"), []byte("PROPAGATE_API_URL=http://localhost:8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unsetEnvForTest(t, "PROPAGATE_API_URL")
+	withBakedDefaultAPIURL(t, "https://api.propagatecli.com/")
+
+	loadLocalDotenv(repo)
+
+	if got := resolveAPIURL("", repo); got != "http://localhost:8080" {
+		t.Fatalf("resolveAPIURL() = %q, want http://localhost:8080", got)
 	}
 }
 
@@ -79,6 +126,18 @@ func unsetEnvForTest(t *testing.T, name string) {
 			return
 		}
 		_ = os.Unsetenv(name)
+	})
+}
+
+func withBakedDefaultAPIURL(t *testing.T, value string) {
+	t.Helper()
+	old := BakedDefaultAPIURL
+	oldProfileDefault := identity.DefaultAPIURL
+	BakedDefaultAPIURL = value
+	identity.DefaultAPIURL = value
+	t.Cleanup(func() {
+		BakedDefaultAPIURL = old
+		identity.DefaultAPIURL = oldProfileDefault
 	})
 }
 
