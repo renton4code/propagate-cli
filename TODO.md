@@ -1,2 +1,3 @@
-- In pin codes avoid letter "O" for confusion with zero
-- If PIN entered incorrectly 3 times - we discard the invite
+- Test deploy
+- Publish whitepaper, binaries and sh script in landing, update license and all relevant info
+- Do manual e2e test
