@@ -61,7 +61,7 @@ Supabase Postgres
 Git repository
   |
   v
-propagate.yaml: team metadata, public keys, safe declarations, pending access changes
+propagate.yaml: team metadata, public keys, safe declarations, accepted access state
 ```
 
 The CLI performs the cryptographic work for normal secret operations. The API is a signed workflow boundary. The database stores encrypted values, encrypted scope key envelopes, config state, invite state, and audit metadata. Git stores `propagate.yaml`, which is intended to be reviewed like code.
@@ -72,26 +72,44 @@ A Propagate user is identified by a public key, not by a password or email addre
 
 Each local identity contains:
 
-| Item | Purpose |
-| --- | --- |
-| Signing private key | Signs API requests and config decisions |
-| Signing public key | Public identity material |
-| Encryption private key | Decrypts scope key envelopes |
-| Encryption public key | Receives encrypted scope key envelopes |
-| Public key SHA | Compact stable identifier shown in config and status |
-| Handle | Human-readable display metadata |
+| Item | Scheme | Purpose |
+| --- | --- | --- |
+| Signing private key | Ed25519 | Signs API requests and config decisions |
+| Signing public key | Ed25519 | Public identity material |
+| Encryption private key | X25519 | Decrypts scope key envelopes |
+| Encryption public key | X25519 | Receives encrypted scope key envelopes |
+| Public key SHA | SHA-256 of the signing public key | Compact stable identifier shown in config and status |
+| Handle | n/a | Human-readable display metadata |
 
-Private identity material lives under `~/.propagate` and should be protected with owner-only file permissions. If a private key is lost, the cloud cannot recover it. The user must create a new identity, request access again, and have a management member approve new envelopes.
+The public key SHA is derived from the signing key, so it is the canonical identifier for authorization and audit, while the encryption key is used only to wrap and unwrap scope key envelopes.
+
+Private identity material lives under `~/.propagate` and should be protected with owner-only file permissions. The CLI enforces this: the identity directory must be `0700` and the identity file must be owner-only, or loading fails. If a private key is lost, the cloud cannot recover it. The user must create a new identity, request access again, and have a management member approve new envelopes.
 
 ## Encryption Model
 
 Propagate uses envelope encryption.
 
-1. Each scope, such as `dev`, `staging`, or `prod`, has a random symmetric scope key.
+1. Each scope, such as `dev`, `staging`, or `prod`, has a random 32-byte symmetric scope key.
 2. Environment values in that scope are encrypted locally with the scope key.
-3. The scope key is encrypted to each authorized member's encryption public key.
+3. The scope key is encrypted to each authorized member's encryption public key, producing one envelope per member.
 4. The API stores encrypted values and encrypted scope key envelopes.
 5. A member pulls an envelope and encrypted values, decrypts the scope key locally, then decrypts values locally.
+
+### Cryptographic Primitives
+
+Propagate builds on widely reviewed primitives from the Go standard library rather than a bespoke cipher:
+
+| Layer | Primitive | Algorithm identifier |
+| --- | --- | --- |
+| Request signing and identity | Ed25519 | n/a |
+| Scope key | 32 random bytes from a CSPRNG | n/a |
+| Env value encryption | AES-256-GCM, scope key as the symmetric key | `propagate-secret-aesgcm-v1` |
+| Scope key envelope | Ephemeral X25519 ECDH, HKDF-SHA-256 key derivation, AES-256-GCM | `propagate-envelope-x25519-aesgcm-v1` |
+| Variable declaration digest | HMAC-SHA-256 keyed by the scope key | `hmac-sha-256:v1` |
+
+Each envelope is sealed with a fresh ephemeral X25519 key pair. The wire format is `ephemeral_public_key || nonce || ciphertext`. Authenticated additional data binds value ciphertext to the team, scope, env file path, variable name, and scope key version, and binds each envelope to the recipient's public key SHA and scope key version, so ciphertext cannot be silently moved between contexts or recipients.
+
+### Keyed Declaration Digests
 
 Sensitive variable declarations in `propagate.yaml` do not store raw values or raw plaintext hashes. They use keyed digests with an explicit algorithm prefix, for example:
 
@@ -134,19 +152,21 @@ If a team considers variable names or env file paths sensitive, it should treat 
 It can contain:
 
 - Config format version.
-- Team ID, team name, and cloud revision.
+- Team ID, team name, cloud revision, and sync status.
 - Scopes and env file mappings.
 - Variable declarations without sensitive values.
 - Member public identity material.
 - Management bit and per-scope permissions.
-- Pending join requests and access decisions.
-- Non-secret history of resolved requests.
 
-It must not contain sensitive plaintext, masked values, private material, raw plaintext hashes, tokens, or unmarked value-like examples. Config validation rejects these shapes so a bad edit does not silently become accepted team state.
+Pending join requests and resolved access history are part of the trust model but live in cloud state rather than in the committed file. They are surfaced through `propagate team status` and the join request API, not rendered into `propagate.yaml`. Treat the committed config as the reviewable record of accepted team and access state, and the cloud status output as the live view of in-flight requests.
+
+`propagate.yaml` must not contain sensitive plaintext, masked values, private material, raw plaintext hashes, tokens, or unmarked value-like examples. Config validation rejects these shapes so a bad edit does not silently become accepted team state.
 
 ## Request Signing And API Trust
 
-Protected API requests are signed by the caller's local signing key. The signed material includes the method, path, body digest, timestamp, nonce, public key SHA, and CLI version. The API verifies signatures, rejects stale timestamps, rejects replayed nonces, resolves membership from database state, and evaluates permissions before applying any change.
+Protected API requests are signed by the caller's local Ed25519 signing key. The signed material includes the HTTP method, URL path, URL query string, SHA-256 body digest, timestamp, nonce, public key SHA, CLI version, and operation ID when present. The API verifies signatures, rejects timestamps outside a clock-skew window (about five minutes), rejects replayed nonces using a short-lived nonce table, resolves membership from database state, and evaluates permissions before applying any change.
+
+A small number of endpoints are intentionally unsigned because they precede identity establishment or expose only non-secret material: the relay public key, the CLI version, and the list of active invite labels for a known team ID. Treat invite labels for a team as discoverable by anyone who knows the team ID.
 
 Authorization is derived from server-side membership and scope state. The API must not trust client-provided claims such as "I am management" or "I have write access" without checking database state.
 
@@ -183,22 +203,34 @@ The server never needs plaintext scope keys in this path.
 
 ### PIN Invite Join
 
-PIN invites trade some strictness for a smoother onboarding path. A management member creates an invite with a label and pre-approved access. The CLI gets the server relay public key, decrypts selected scope keys locally, encrypts those scope keys to the relay public key, and uploads the relay-encrypted bundle. The API stores a PIN verifier, not the plaintext PIN, and returns the PIN once.
+PIN invites trade some strictness for a smoother onboarding path. A management member creates an invite with a label and pre-approved access. The CLI gets the server relay public key, decrypts selected scope keys locally, re-encrypts those scope keys to the relay public key, and uploads the relay-encrypted bundle. The API stores a bcrypt verifier of the PIN, not the plaintext PIN, and returns the PIN once at creation time.
 
 During redemption:
 
 1. The joiner selects the invite and submits the PIN with their public identity material.
-2. The server verifies the PIN.
-3. The server decrypts the relay-encrypted scope keys in memory.
+2. The server verifies the PIN against the stored bcrypt verifier.
+3. The server decrypts the relay-encrypted scope keys in memory using the server relay private key.
 4. The server re-encrypts the scope keys to the joiner's encryption public key.
-5. The server stores active envelopes and member state.
-6. Relay-encrypted invite material is no longer needed after redemption.
+5. The server stores active envelopes and member state, and marks the invite redeemed.
 
-This is the one documented flow where plaintext scope keys briefly exist in server memory. Mitigations include short invite lifetimes, one-time PIN display, failed-attempt lockout, rate limits, restricted relay-key access, and revocation of unused invites.
+This is the one documented flow where plaintext scope keys briefly exist in server memory.
+
+Mitigations currently enforced:
+
+- The PIN is stored only as a bcrypt verifier and displayed once at creation.
+- After three failed PIN attempts the invite's PIN is invalidated.
+- Unused invites can be revoked.
+- The relay private key is held only in server configuration, not exposed through the API.
+
+Known gaps and recommended hardening:
+
+- Invites do not yet expire automatically. Teams should revoke invites they no longer expect to be redeemed.
+- There is no rate limiting on invite creation, listing, or redemption endpoints today.
+- Redemption marks the invite redeemed but does not erase the relay-encrypted scope key bundle from the database, so that ciphertext persists at rest. It is only decryptable with the server relay private key, but operators should plan to clear or rotate it.
 
 ### `propagate run` Versus `propagate env pull`
 
-`propagate run` is the preferred local development path when tooling allows it. The CLI decrypts values locally and injects them only into the child process environment. It does not write `.env` files.
+`propagate run` is the preferred local development path when tooling allows it. The CLI decrypts values locally and injects them into the child process environment instead of writing `.env` files. The child also inherits the parent shell environment, so Propagate-managed values are added to, not isolated from, whatever the surrounding environment already exposes.
 
 `propagate env pull` is the compatibility path for tools that require files on disk. It decrypts values locally and merges them into configured env files after preview and confirmation. This is familiar, but less safe because plaintext values remain on disk until the user or tooling removes them.
 
@@ -220,7 +252,7 @@ Agent guidance is not access control. An agent that can read local files or term
 
 ### Revocation Is Not Time Travel
 
-Revoking a member prevents future envelope and secret access through Propagate. It cannot erase values the member already pulled, copied, logged, or wrote to disk. Meaningful revocation should include scope key rotation and value re-encryption for remaining authorized members.
+Revoking a member prevents future envelope and secret access through Propagate. It cannot erase values the member already pulled, copied, logged, or wrote to disk. Meaningful revocation should include scope key rotation and value re-encryption for remaining authorized members. Automated rotation is not yet part of the MVP, so after a revocation that matters, treat the previously shared values as compromised and rotate the underlying secrets at their source.
 
 ### Lost Keys Cannot Be Recovered
 
@@ -263,7 +295,9 @@ Use this checklist when reviewing a Propagate release or deployment:
 - Do env pulls require preview and confirmation before writing plaintext files?
 - Do write operations use expected revisions or secret version preconditions?
 - Is PIN invite relay behavior documented and limited to invite redemption?
-- Are unused or failed invites revocable and rate-limited?
+- Are unused invites revocable, and do failed PIN attempts invalidate the invite?
+- Is the lack of invite expiry and endpoint rate limiting accounted for in the deployment's threat model?
+- Are unsigned public endpoints limited to non-secret material (relay public key, version, invite labels)?
 - Are agent instructions treated as guidance rather than authorization?
 
 ## Related Docs

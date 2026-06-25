@@ -137,6 +137,12 @@ const features = [
   },
 ];
 
+const releaseTag = "v0.1.0-rc.1";
+const releasePageUrl = "https://github.com/renton4code/propagate-cli/releases/tag/v0.1.0-rc.1";
+const installScriptUrl = "https://propagatecli.com/install.sh";
+const whitepaperUrl = "https://github.com/renton4code/propagate-cli/blob/main/docs/whitepaper.mdx";
+const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICENSE";
+
 ---
 
 <Layout>
@@ -152,26 +158,14 @@ const features = [
       </div>
       <nav class="hidden md:flex items-center gap-1">
         <a
-          href="#features"
-          class="px-4 py-1.5 text-sm font-semibold"
-          style="color:#888;border:2px solid transparent"
-          onmouseover="this.style.color='#fff';this.style.borderColor='#fff';this.style.boxShadow='3px 3px 0 #FFE500'"
-          onmouseout="this.style.color='#888';this.style.borderColor='transparent';this.style.boxShadow='none'"
-        >Features</a>
-        <a
-          href="#how-it-works"
-          class="px-4 py-1.5 text-sm font-semibold"
-          style="color:#888;border:2px solid transparent"
-          onmouseover="this.style.color='#fff';this.style.borderColor='#fff';this.style.boxShadow='3px 3px 0 #FFE500'"
-          onmouseout="this.style.color='#888';this.style.borderColor='transparent';this.style.boxShadow='none'"
-        >How it works</a>
-        <a
-          href="#comparison"
-          class="px-4 py-1.5 text-sm font-semibold"
-          style="color:#888;border:2px solid transparent"
-          onmouseover="this.style.color='#fff';this.style.borderColor='#fff';this.style.boxShadow='3px 3px 0 #FFE500'"
-          onmouseout="this.style.color='#888';this.style.borderColor='transparent';this.style.boxShadow='none'"
-        >Comparison</a>
+          href={whitepaperUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="px-2 py-1.5 text-sm font-semibold"
+          style="color:#888;text-decoration:none"
+          onmouseover="this.style.color='#fff';this.style.textDecoration='underline';this.style.textUnderlineOffset='3px'"
+          onmouseout="this.style.color='#888';this.style.textDecoration='none'"
+        >Whitepaper</a>
         <a
           href="https://github.com/renton4code/propagate-cli"
           target="_blank"
@@ -443,8 +437,8 @@ const features = [
               </tr>
               <tr>
                 <td style="padding:0.9rem 1rem;border-right:2px solid #fff;font-weight:700;color:#fff">💸 Zero-cost path</td>
-                <td style="padding:0.9rem 1rem;border-right:2px solid #fff;color:#FFE500;font-weight:800">✅ Free MIT project</td>
-                <td style="padding:0.9rem 1rem;border-right:2px solid #fff;color:#bbb">✅ Free OSS core</td>
+                <td style="padding:0.9rem 1rem;border-right:2px solid #fff;color:#FFE500;font-weight:800">✅ OSS</td>
+                <td style="padding:0.9rem 1rem;border-right:2px solid #fff;color:#bbb">✅ OSS core</td>
                 <td style="padding:0.9rem 1rem;border-right:2px solid #fff;color:#bbb">⚠️ Community edition / OpenBao</td>
                 <td style="padding:0.9rem 1rem;border-right:2px solid #fff;color:#bbb">⚠️ Vendor-hosted model</td>
                 <td style="padding:0.9rem 1rem;color:#bbb">⚠️ Vendor-hosted model</td>
@@ -466,7 +460,7 @@ const features = [
           class="inline-block px-3 py-1 text-xs font-bold font-mono mb-8 uppercase tracking-widest"
           style="border:2px solid #000;box-shadow:3px 3px 0 #000;color:#000"
         >
-          Open source · MIT license
+          Open source · MIT license · {releaseTag}
         </div>
         <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4" style="color:#000;letter-spacing:-0.03em">
           Your secrets don't<br />belong in Slack.
@@ -476,17 +470,17 @@ const features = [
         </p>
         <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
           <a
-            href="https://github.com/renton4code/propagate-cli"
+            href={installScriptUrl}
             target="_blank"
             rel="noopener noreferrer"
             class="flex items-center gap-3 px-5 py-3 font-mono text-sm font-bold"
             style="background:#fff;color:#000;border:2px solid #000;box-shadow:4px 4px 0 #000;text-decoration:none"
           >
             <span style="color:#888">$</span>
-            <span>propagate quickstart</span>
+            <span>curl -fsSL propagatecli.com/install.sh | sh</span>
           </a>
           <a
-            href="https://github.com/renton4code/propagate-cli"
+            href={releasePageUrl}
             target="_blank"
             rel="noopener noreferrer"
             class="flex items-center gap-2 px-5 py-3 text-sm font-bold"
@@ -495,7 +489,7 @@ const features = [
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
             </svg>
-            Star on GitHub
+            Download binaries
           </a>
         </div>
       </div>
@@ -509,7 +503,7 @@ const features = [
         <div class="mt-[3px]"><FishSvg width={24} height={18} /></div>
         <span style="font-weight:700">propagate</span>
       </div>
-      <p style="color:#555">Open source under the MIT License</p>
+      <p style="color:#555">Open source under the <a href={licenseUrl} target="_blank" rel="noopener noreferrer" style="color:#888;text-decoration:underline">MIT License</a> · release {releaseTag}</p>
     </div>
   </footer>
 </Layout>
