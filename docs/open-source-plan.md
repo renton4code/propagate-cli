@@ -110,7 +110,7 @@ Purpose: lightweight, **normative** specifications — stable names, algorithms,
 | `propagate-yaml.md` | Config file schema, safe declarations, pending joins, sensitivity rules |
 | `versioning.md` | CLI semver vs API compatibility matrix; deprecation policy |
 
-**Sources to rewrite from:** `propagate-api-implementation-guide.md`, `packages/shared/secretcrypto`, backend handlers, and CLI client code.
+**Sources to rewrite from:** `../internal-docs/propagate-api-implementation-guide.md`, `packages/shared/secretcrypto`, backend handlers, and CLI client code.
 
 #### CLI docs (`docs/cli/`)
 
@@ -124,16 +124,16 @@ Purpose: lightweight **CLI reference** — commands, flags, output contracts, in
 | `output.md` | Human output style, `--json` schemas, exit codes, `--dry-run` |
 | `install.md` | Install script URL on landing, manual GitHub Release download, checksum verification, PATH setup |
 
-**Sources to adapt:** `propagate-cli-implementation-guide.md` (remove monorepo paths), `docs/cli-scenarios.mdx` if kept as examples linked from `workflows.md`.
+**Sources to adapt:** `../internal-docs/propagate-cli-implementation-guide.md` (remove monorepo paths), `docs/cli-scenarios.mdx` if kept as examples linked from `workflows.md`.
 
 #### What stays private (doc mapping)
 
 | Private document | Public replacement |
 | --- | --- |
-| `propagate-technical-design.md` | Publish sanitized architecture docs; keep only secrets/ops runbooks private |
-| `propagate-prd.md` | Informs whitepaper and roadmap docs; keep strategy-only sections private |
-| `propagate-api-implementation-guide.md` | `docs/contract/api.md` + backend architecture docs |
-| `propagate-cli-implementation-guide.md` | Adapted into `docs/cli/*` |
+| `../internal-docs/propagate-technical-design.md` | Publish sanitized architecture docs; keep only secrets/ops runbooks private |
+| `../internal-docs/propagate-prd.md` | Informs whitepaper and roadmap docs; keep strategy-only sections private |
+| `../internal-docs/propagate-api-implementation-guide.md` | `docs/contract/api.md` + backend architecture docs |
+| `../internal-docs/propagate-cli-implementation-guide.md` | Adapted into `docs/cli/*` |
 
 Do not copy secrets or environment-specific internals during export — **author public docs explicitly** and sanitize examples.
 
