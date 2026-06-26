@@ -173,6 +173,12 @@ else
   chmod 755 "${PREFIX}/propagate"
 fi
 
+if [ "${OS}" = "darwin" ] && command -v xattr >/dev/null 2>&1; then
+  if xattr -dr com.apple.quarantine "${PREFIX}/propagate" 2>/dev/null; then
+    log "Cleared macOS quarantine attribute."
+  fi
+fi
+
 log "Installed propagate to ${PREFIX}/propagate"
 "${PREFIX}/propagate" version || true
 

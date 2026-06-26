@@ -87,17 +87,16 @@ func RepoRelative(root, path string) (string, error) {
 func ProjectDirs(w Worktree) []string {
 	dirs := map[string]bool{".": true}
 	for _, file := range w.TrackedFiles {
-		parts := strings.Split(file, "/")
-		if len(parts) >= 3 && isProjectContainer(parts[0]) {
-			dirs[parts[0]+"/"+parts[1]] = true
+		root := topLevelDir(file)
+		if root == "" || isExcludedRootDir(root) {
+			continue
 		}
+		dirs[root] = true
 	}
 
 	out := make([]string, 0, len(dirs))
 	for dir := range dirs {
-		if !isExcludedDir(dir) {
-			out = append(out, dir)
-		}
+		out = append(out, dir)
 	}
 	sort.Strings(out)
 	return out
@@ -116,22 +115,26 @@ func trackedDirs(files []string) map[string]bool {
 	return dirs
 }
 
-func isProjectContainer(name string) bool {
-	switch name {
-	case "apps", "packages", "services":
+func topLevelDir(path string) string {
+	clean := strings.TrimSpace(filepath.ToSlash(path))
+	if clean == "" || clean == "." {
+		return ""
+	}
+	first, _, found := strings.Cut(clean, "/")
+	if !found {
+		return ""
+	}
+	return first
+}
+
+func isExcludedRootDir(dir string) bool {
+	if strings.HasPrefix(dir, ".") || strings.HasPrefix(dir, "_") {
+		return true
+	}
+	switch dir {
+	case "node_modules", "dist", "build", "coverage":
 		return true
 	default:
 		return false
 	}
-}
-
-func isExcludedDir(dir string) bool {
-	parts := strings.Split(dir, "/")
-	for _, part := range parts {
-		switch part {
-		case "node_modules", "dist", "build", "coverage", ".next", ".turbo", ".cache", "fixtures", "examples":
-			return true
-		}
-	}
-	return false
 }
