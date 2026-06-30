@@ -24,7 +24,9 @@ jobs:
     name: Build & Push Image
     runs-on: ubuntu-latest
     outputs:
-      image_tag: sha-${{ github.sha }}
+      # Digest-pinned reference so every deploy produces a unique image string
+      # and Cloud Run is forced to roll a new revision.
+      image: ${{ steps.ref.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +44,7 @@ jobs:
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -53,6 +56,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Resolve digest-pinned image reference
+        id: ref
+        run: |
+          echo "image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
   deploy:
     name: Terraform Plan & Apply
     runs-on: ubuntu-latest
@@ -61,6 +69,62 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Pin the Cloud Run image to the freshly built digest by writing it to the
+      # workspace `image` variable. Workspace variables take precedence over the
+      # config, so this overrides any stale pin and guarantees the new image is
+      # deployed instead of whatever the workspace was previously holding.
+      - name: Pin Cloud Run image in Terraform Cloud workspace
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${IMAGE:-}" ]; then
+            echo "No image reference passed from the build job" >&2
+            exit 1
+          fi
+
+          api="https://app.terraform.io/api/v2"
+          auth="Authorization: Bearer ${TF_API_TOKEN}"
+          ct="Content-Type: application/vnd.api+json"
+
+          ws_id=$(curl -sf -H "$auth" -H "$ct" \
+            "$api/organizations/${TF_ORGANIZATION}/workspaces/${TF_WORKSPACE}" \
+            | jq -r '.data.id')
+
+          if [ -z "$ws_id" ] || [ "$ws_id" = "null" ]; then
+            echo "Could not resolve workspace ${TF_ORGANIZATION}/${TF_WORKSPACE}" >&2
+            exit 1
+          fi
+
+          var_id=$(curl -sf -H "$auth" -H "$ct" \
+            "$api/workspaces/${ws_id}/vars" \
+            | jq -r '.data[] | select(.attributes.key=="image") | .id')
+
+          payload=$(jq -n --arg img "$IMAGE" '{
+            data: {
+              type: "vars",
+              attributes: {
+                key: "image",
+                value: $img,
+                category: "terraform",
+                hcl: false,
+                sensitive: false
+              }
+            }
+          }')
+
+          if [ -n "$var_id" ] && [ "$var_id" != "null" ]; then
+            curl -sf -X PATCH -H "$auth" -H "$ct" \
+              "$api/workspaces/${ws_id}/vars/${var_id}" -d "$payload" > /dev/null
+          else
+            curl -sf -X POST -H "$auth" -H "$ct" \
+              "$api/workspaces/${ws_id}/vars" -d "$payload" > /dev/null
+          fi
+
+          echo "Pinned workspace image variable to ${IMAGE}"
 
       - name: Upload Terraform configuration
         uses: hashicorp/tfc-workflows-github/actions/upload-configuration@v1.3.1
