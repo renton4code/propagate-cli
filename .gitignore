@@ -1,2 +1,3 @@
 .gocache/
 packages/backend/.env
+.DS_Store
