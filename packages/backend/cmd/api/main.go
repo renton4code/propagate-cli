@@ -50,6 +50,6 @@ func main() {
 		addr = ":" + addr
 	}
 
-	log.Printf("starting propagate API on %s", addr)
+	log.Printf("Starting propagate API on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
