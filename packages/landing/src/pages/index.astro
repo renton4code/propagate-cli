@@ -492,6 +492,16 @@ const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICEN
             Download binaries
           </a>
         </div>
+        <div
+          data-copy-toast
+          role="status"
+          aria-live="polite"
+          aria-hidden="true"
+          class="mt-4 inline-block px-3 py-2 text-xs font-mono font-bold"
+          style="opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity 160ms ease,transform 160ms ease;background:#000;color:#FFE500;border:2px solid #000;box-shadow:3px 3px 0 #000"
+        >
+          Command copied
+        </div>
       </div>
     </section>
   </main>
@@ -508,6 +518,25 @@ const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICEN
   </footer>
   <script is:inline>
     const installCommandButton = document.querySelector("[data-copy-command]");
+    const copyToast = document.querySelector("[data-copy-toast]");
+    let copyToastTimeout;
+
+    const showCopyToast = () => {
+      if (!(copyToast instanceof HTMLElement)) {
+        return;
+      }
+
+      copyToast.setAttribute("aria-hidden", "false");
+      copyToast.style.opacity = "1";
+      copyToast.style.transform = "translateY(0)";
+
+      window.clearTimeout(copyToastTimeout);
+      copyToastTimeout = window.setTimeout(() => {
+        copyToast.setAttribute("aria-hidden", "true");
+        copyToast.style.opacity = "0";
+        copyToast.style.transform = "translateY(4px)";
+      }, 1600);
+    };
 
     const copyWithFallback = (text) => {
       const textarea = document.createElement("textarea");
@@ -517,8 +546,9 @@ const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICEN
       textarea.style.left = "-9999px";
       document.body.appendChild(textarea);
       textarea.select();
-      document.execCommand("copy");
+      const isCopied = document.execCommand("copy");
       document.body.removeChild(textarea);
+      return isCopied;
     };
 
     if (installCommandButton instanceof HTMLButtonElement) {
@@ -528,10 +558,16 @@ const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICEN
           return;
         }
 
+        let isCopied = false;
         try {
           await navigator.clipboard.writeText(command);
+          isCopied = true;
         } catch {
-          copyWithFallback(command);
+          isCopied = copyWithFallback(command);
+        }
+
+        if (isCopied) {
+          showCopyToast();
         }
       });
     }

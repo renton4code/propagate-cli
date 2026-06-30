@@ -10,13 +10,14 @@ usage() {
 Propagate installer
 
 Usage:
-  sh install.sh [--version <tag>] [--prefix <dir>] [--insecure]
+  sh install.sh [--version <tag>] [--prefix <dir>] [--insecure] [--no-modify-path]
 
 Options:
-  --version   Release tag to install (default: v0.1.0-rc.2)
-  --prefix    Install directory for the binary (default: ~/.propagate/bin)
-  --insecure  Skip SHA-256 checksum verification (not recommended)
-  -h, --help  Show this help text
+  --version         Release tag to install (default: v0.1.0-rc.2)
+  --prefix          Install directory for the binary (default: ~/.propagate/bin)
+  --insecure        Skip SHA-256 checksum verification (not recommended)
+  --no-modify-path  Do not add the install directory to your shell PATH
+  -h, --help        Show this help text
 EOF
 }
 
@@ -79,6 +80,7 @@ expected_sha_for_v001rc2() {
 VERSION="${DEFAULT_VERSION}"
 PREFIX="${DEFAULT_PREFIX}"
 INSECURE=0
+MODIFY_PATH=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -94,6 +96,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --insecure)
       INSECURE=1
+      shift
+      ;;
+    --no-modify-path)
+      MODIFY_PATH=0
       shift
       ;;
     -h|--help)
@@ -182,11 +188,63 @@ fi
 log "Installed propagate to ${PREFIX}/propagate"
 "${PREFIX}/propagate" version || true
 
+print_manual_path_hint() {
+  log ""
+  log "Add this directory to your PATH:"
+  log "  export PATH=\"${PREFIX}:\$PATH\""
+}
+
+ensure_line_in_file() {
+  # $1 = file, $2 = line to add, $3 = marker to test for existing presence
+  file="$1"
+  line="$2"
+  marker="$3"
+  mkdir -p "$(dirname "${file}")"
+  if [ -f "${file}" ] && grep -F "${marker}" "${file}" >/dev/null 2>&1; then
+    return 0
+  fi
+  {
+    printf '\n# Added by propagate installer\n'
+    printf '%s\n' "${line}"
+  } >>"${file}"
+  log "Updated ${file}"
+}
+
 case ":${PATH}:" in
-  *":${PREFIX}:"*) ;;
+  *":${PREFIX}:"*)
+    : # already on PATH
+    ;;
   *)
-    log ""
-    log "Add this directory to your PATH if needed:"
-    log "  export PATH=\"${PREFIX}:\$PATH\""
+    if [ "${MODIFY_PATH}" -ne 1 ]; then
+      print_manual_path_hint
+    else
+      SHELL_NAME="$(basename "${SHELL:-sh}")"
+      UPDATED=0
+      case "${SHELL_NAME}" in
+        zsh)
+          ensure_line_in_file "${HOME}/.zshrc" "export PATH=\"${PREFIX}:\$PATH\"" "${PREFIX}" && UPDATED=1
+          ;;
+        bash)
+          ensure_line_in_file "${HOME}/.bashrc" "export PATH=\"${PREFIX}:\$PATH\"" "${PREFIX}" && UPDATED=1
+          if [ "${OS}" = "darwin" ]; then
+            ensure_line_in_file "${HOME}/.bash_profile" "export PATH=\"${PREFIX}:\$PATH\"" "${PREFIX}" && UPDATED=1
+          fi
+          ;;
+        fish)
+          ensure_line_in_file "${HOME}/.config/fish/config.fish" "set -gx PATH \"${PREFIX}\" \$PATH" "${PREFIX}" && UPDATED=1
+          ;;
+        *)
+          ensure_line_in_file "${HOME}/.profile" "export PATH=\"${PREFIX}:\$PATH\"" "${PREFIX}" && UPDATED=1
+          ;;
+      esac
+
+      if [ "${UPDATED}" -eq 1 ]; then
+        log ""
+        log "Added ${PREFIX} to your PATH."
+        log "Restart your shell or run: export PATH=\"${PREFIX}:\$PATH\""
+      else
+        print_manual_path_hint
+      fi
+    fi
     ;;
 esac
