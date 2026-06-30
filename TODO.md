@@ -1,3 +1,1 @@
-- Test deploy
-- Publish whitepaper, binaries and sh script in landing, update license and all relevant info
 - Do manual e2e test

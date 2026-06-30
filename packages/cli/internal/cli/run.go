@@ -13,6 +13,15 @@ var Version = "0.1.0-dev"
 
 var BakedDefaultAPIURL = identity.DefaultAPIURL
 
+const rootBanner = "______                                  _\n" +
+	"| ___ \\                                | |\n" +
+	"| |_/ / __ ___  _ __   __ _  __ _  __ _| |_ ___\n" +
+	"|  __/ '__/ _ \\| '_ \\ / _` |/ _` |/ _` | __/ _ \\\n" +
+	"| |  | | | (_) | |_) | (_| | (_| | (_| | ||  __/\n" +
+	"\\_|  |_|  \\___/| .__/ \\__,_|\\__, |\\__,_|\\__\\___|\n" +
+	"               | |           __/ |\n" +
+	"               |_|          |___/"
+
 type Streams struct {
 	In      io.Reader
 	Out     io.Writer
@@ -50,6 +59,8 @@ func Run(args []string, streams Streams) int {
 		return renderError(streams.Err, global.JSON, global.NoColor, err)
 	}
 	if len(rest) == 0 {
+		printRootBanner(streams.Out)
+		fmt.Fprintln(streams.Out)
 		printRootHelp(streams.Out)
 		return ExitSuccess
 	}
@@ -162,4 +173,8 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "  config    config synchronization commands")
 	fmt.Fprintln(w, "  env       environment variable commands")
 	fmt.Fprintln(w, "  version   print CLI version")
+}
+
+func printRootBanner(w io.Writer) {
+	fmt.Fprintln(w, rootBanner)
 }

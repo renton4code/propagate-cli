@@ -139,7 +139,7 @@ const features = [
 
 const releaseTag = "v0.1.0-rc.1";
 const releasePageUrl = "https://github.com/renton4code/propagate-cli/releases/tag/v0.1.0-rc.1";
-const installScriptUrl = "https://propagatecli.com/install.sh";
+const installCommand = "curl -fsSL propagatecli.com/install.sh | sh";
 const whitepaperUrl = "https://github.com/renton4code/propagate-cli/blob/main/docs/whitepaper.mdx";
 const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICENSE";
 
@@ -469,16 +469,16 @@ const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICEN
           Open source. Set up in minutes and your team's secrets never touch Slack again.
         </p>
         <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <a
-            href={installScriptUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            data-copy-command={installCommand}
+            title="Copy install command"
             class="flex items-center gap-3 px-5 py-3 font-mono text-sm font-bold"
             style="background:#fff;color:#000;border:2px solid #000;box-shadow:4px 4px 0 #000;text-decoration:none"
           >
             <span style="color:#888">$</span>
-            <span>curl -fsSL propagatecli.com/install.sh | sh</span>
-          </a>
+            <span>{installCommand}</span>
+          </button>
           <a
             href={releasePageUrl}
             target="_blank"
@@ -506,4 +506,34 @@ const licenseUrl = "https://github.com/renton4code/propagate-cli/blob/main/LICEN
       <p style="color:#555">Open source under the <a href={licenseUrl} target="_blank" rel="noopener noreferrer" style="color:#888;text-decoration:underline">MIT License</a> · release {releaseTag}</p>
     </div>
   </footer>
+  <script is:inline>
+    const installCommandButton = document.querySelector("[data-copy-command]");
+
+    const copyWithFallback = (text) => {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "absolute";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    };
+
+    if (installCommandButton instanceof HTMLButtonElement) {
+      installCommandButton.addEventListener("click", async () => {
+        const command = installCommandButton.dataset.copyCommand;
+        if (!command) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(command);
+        } catch {
+          copyWithFallback(command);
+        }
+      });
+    }
+  </script>
 </Layout>
