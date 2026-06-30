@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_VERSION="v0.1.0-rc.1"
+DEFAULT_VERSION="v0.1.0-rc.2"
 DEFAULT_PREFIX="${HOME}/.propagate/bin"
 REPO_SLUG="renton4code/propagate-cli"
 
@@ -13,7 +13,7 @@ Usage:
   sh install.sh [--version <tag>] [--prefix <dir>] [--insecure]
 
 Options:
-  --version   Release tag to install (default: v0.1.0-rc.1)
+  --version   Release tag to install (default: v0.1.0-rc.2)
   --prefix    Install directory for the binary (default: ~/.propagate/bin)
   --insecure  Skip SHA-256 checksum verification (not recommended)
   -h, --help  Show this help text
@@ -64,14 +64,14 @@ normalize_arch() {
   esac
 }
 
-expected_sha_for_v001rc1() {
+expected_sha_for_v001rc2() {
   case "$1" in
-    propagate_0.1.0-rc.1_darwin_amd64.tar.gz) printf '4915f4ba33089d0980d14657ba92a488c8f03c7846209eb578f809c136b155e9' ;;
-    propagate_0.1.0-rc.1_darwin_arm64.tar.gz) printf '5d96b06ada261ff6c383567111bbc87c7a3593869d64a09ce3f1f6bc7e1cc8b3' ;;
-    propagate_0.1.0-rc.1_linux_amd64.tar.gz) printf '5ace4e5f4290d8c97d9a99738485ea5fcde8c6224869e9ffa09868a45ff335f4' ;;
-    propagate_0.1.0-rc.1_linux_arm64.tar.gz) printf '1c9a9e9334c258b5306870a1449ea6a91df0deb14b858b1c4698e267249ee23a' ;;
-    propagate_0.1.0-rc.1_windows_amd64.zip) printf '5b52a7f76f7e30b795336d498732bcb1f17c14ec1089c5aecd8e2d56f7634efb' ;;
-    propagate_0.1.0-rc.1_windows_arm64.zip) printf 'fa4b6691e2a7ab7883b4a3d15df2bf00cb9da6e2185cedd10b8311ecb5205d70' ;;
+    propagate_0.1.0-rc.2_darwin_amd64.tar.gz) printf '9e824dd8202720336cdd1a4c728955a24282a2f3a1d91f6615e063294dcc4321' ;;
+    propagate_0.1.0-rc.2_darwin_arm64.tar.gz) printf '2c781846192e2ce21aa025913451869fbce675b03fe22e206db3a7947ce28a4f' ;;
+    propagate_0.1.0-rc.2_linux_amd64.tar.gz) printf 'd9e83e30ebf37155c7bdc19c323d8431121e1206374e61bef8f39066ae6e5f28' ;;
+    propagate_0.1.0-rc.2_linux_arm64.tar.gz) printf '915013b07ba071d339c9989c1265b1a40b971aa218690d6d6226a8093dd3e2df' ;;
+    propagate_0.1.0-rc.2_windows_amd64.zip) printf '82c700d15bc16deeb8e18dfd7609fab163644762dd989424da411f9de2814070' ;;
+    propagate_0.1.0-rc.2_windows_arm64.zip) printf '90bad47714d34da24eeb94a1ed721ffc6071db76c7c005402b6f449053b01526' ;;
     *) return 1 ;;
   esac
 }
@@ -135,8 +135,8 @@ if [ "${INSECURE}" -eq 1 ]; then
   log "Skipping checksum verification because --insecure was provided."
 else
   EXPECTED_SHA=""
-  if [ "${VERSION}" = "v0.1.0-rc.1" ]; then
-    EXPECTED_SHA="$(expected_sha_for_v001rc1 "${ASSET_NAME}" || true)"
+  if [ "${VERSION}" = "v0.1.0-rc.2" ]; then
+    EXPECTED_SHA="$(expected_sha_for_v001rc2 "${ASSET_NAME}" || true)"
   fi
 
   if [ -z "${EXPECTED_SHA}" ]; then

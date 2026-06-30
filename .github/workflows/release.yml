@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           version="${{ inputs.version }}"
           if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Version must look like v0.1.0 or v0.1.0-rc.1"
+            echo "Version must look like v0.1.0 or v0.1.0-rc.2"
             exit 1
           fi
 
