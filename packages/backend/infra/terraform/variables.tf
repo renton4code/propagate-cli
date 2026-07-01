@@ -154,6 +154,7 @@ variable "secret_ids" {
   type        = set(string)
   default = [
     "propagate-database-url",
+    "propagate-relay-private-key",
   ]
 }
 
@@ -162,6 +163,7 @@ variable "secret_env" {
   type        = map(string)
   default = {
     PROPAGATE_DATABASE_URL = "propagate-database-url"
+    PROPAGATE_RELAY_PRIVATE_KEY = "propagate-relay-private-key"
   }
 }
 
