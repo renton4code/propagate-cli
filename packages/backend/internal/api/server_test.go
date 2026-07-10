@@ -319,6 +319,20 @@ func TestConfigPushGrantsApprovedMemberScopeAccess(t *testing.T) {
 				"encrypted_scope_key": "bob-prod-envelope",
 				"algorithm":           "test-envelope",
 			},
+			map[string]any{
+				"scope":               "dev",
+				"recipient_key_sha":   member.sha,
+				"scope_key_version":   float64(1),
+				"encrypted_scope_key": "bob-dev-envelope",
+				"algorithm":           "test-envelope",
+			},
+			map[string]any{
+				"scope":               "prod",
+				"recipient_key_sha":   admin.sha,
+				"scope_key_version":   float64(1),
+				"encrypted_scope_key": "alice-prod-envelope",
+				"algorithm":           "test-envelope",
+			},
 		},
 		"client": map[string]any{"cli_version": "test-cli"},
 	}
@@ -336,6 +350,72 @@ func TestConfigPushGrantsApprovedMemberScopeAccess(t *testing.T) {
 	}
 	if !strings.Contains(keyRec.Body.String(), "bob-prod-envelope") {
 		t.Fatalf("member key envelope missing approved envelope: %s", keyRec.Body.String())
+	}
+}
+
+func TestConfigPushRejectsScopeAccessWithoutEnvelope(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	server := NewServer(storage.NewMemoryStore(), Config{Now: func() time.Time { return now }})
+	admin := newTestSigner(t)
+	setup := setupBody(t, admin, "op_setup_missing_envelope", false)
+	setupRec := httptest.NewRecorder()
+	server.ServeHTTP(setupRec, signedSetupRequest(t, admin, setup, now, "nonce-missing-envelope-setup"))
+	if setupRec.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, body = %s", setupRec.Code, setupRec.Body.String())
+	}
+	teamID, _ := setupFactsFromBody(t, setupRec.Body.Bytes())
+
+	target := map[string]any{
+		"version": float64(1),
+		"team": map[string]any{
+			"id":   teamID,
+			"name": "Acme API",
+		},
+		"scopes": map[string]any{
+			"dev": map[string]any{
+				"env_files": []any{".env"},
+			},
+			"prod": map[string]any{
+				"env_files": []any{".env.production"},
+			},
+		},
+		"members": []any{
+			map[string]any{
+				"handle":                "alice@example.com",
+				"public_key_sha":        admin.sha,
+				"signing_public_key":    admin.ssh,
+				"encryption_public_key": "x25519:dGVzdC1lbmNyeXB0aW9uLXB1YmxpYy1rZXk=",
+				"management":            true,
+				"scopes": map[string]any{
+					"dev":  "write",
+					"prod": "write",
+				},
+			},
+		},
+		"pending": map[string]any{"joins": []any{}, "access_changes": []any{}},
+	}
+	payload := map[string]any{
+		"operation_id":             "op_config_push_missing_envelope",
+		"expected_config_revision": "rev_00001",
+		"target_config_snapshot":   target,
+		"decisions": map[string]any{
+			"approved": []any{},
+			"declined": []any{},
+			"skipped":  []any{},
+		},
+		"client": map[string]any{"cli_version": "test-cli"},
+	}
+	pushBody := mustJSON(t, payload)
+	pushRec := httptest.NewRecorder()
+	server.ServeHTTP(pushRec, signedRequest(t, admin, http.MethodPost, "/v1/teams/"+teamID+"/config/push", pushBody, now, "nonce-missing-envelope-push", "op_config_push_missing_envelope"))
+	if pushRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("config push code = %d, body = %s", pushRec.Code, pushRec.Body.String())
+	}
+	if !strings.Contains(pushRec.Body.String(), "scope_envelope_missing") {
+		t.Fatalf("expected scope_envelope_missing error, got: %s", pushRec.Body.String())
+	}
+	if !strings.Contains(pushRec.Body.String(), "prod") {
+		t.Fatalf("expected error to name the prod scope, got: %s", pushRec.Body.String())
 	}
 }
 

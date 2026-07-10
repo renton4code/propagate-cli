@@ -350,6 +350,9 @@ func (s *MemoryStore) PushConfig(_ context.Context, teamID string, actor domain.
 		}
 		scope.envelopes[envelope.RecipientKeySHA] = envelope
 	}
+	if err := validateScopeEnvelopes(team); err != nil {
+		return domain.ConfigPushResult{}, err
+	}
 
 	oldRevision := team.revision
 	team.revision++
@@ -702,6 +705,29 @@ func effectivePermission(scope *memoryScope, actor domain.Member) string {
 		return "admin"
 	}
 	return ""
+}
+
+// validateScopeEnvelopes mirrors validateScopeEnvelopesSQL for the in-memory
+// store: every member granted read+ access to a scope must have a matching
+// envelope so the invariant (access policy and key material stay consistent)
+// holds regardless of which store backs the server.
+func validateScopeEnvelopes(team *memoryTeam) error {
+	var missing []string
+	for _, scope := range team.scopes {
+		for sha, permission := range scope.memberAccess {
+			if !domain.PermissionAllows(permission, "read") {
+				continue
+			}
+			if _, ok := scope.envelopes[sha]; !ok {
+				missing = append(missing, fmt.Sprintf("scope %q recipient %s", scope.name, sha))
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	return fmt.Errorf("%w: %s", ErrScopeEnvelopeMissing, strings.Join(missing, "; "))
 }
 
 func applySnapshot(team *memoryTeam, raw json.RawMessage) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"propagate/backend/internal/domain"
@@ -481,6 +482,9 @@ func (s *SQLStore) PushConfig(ctx context.Context, teamID string, actor domain.M
 			return domain.ConfigPushResult{}, err
 		}
 	}
+	if err := validateScopeEnvelopesSQL(ctx, tx, teamID); err != nil {
+		return domain.ConfigPushResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		insert into team_config_revisions (
 			team_id, revision_number, config_hash, config_snapshot, pushed_by_key_sha, operation_id, request_fingerprint
@@ -508,6 +512,54 @@ func (s *SQLStore) PushConfig(ctx context.Context, teamID string, actor domain.M
 		EnvelopesCount:   len(request.ScopeKeyEnvelopes),
 		AuditEventsCount: 1,
 	}, nil
+}
+
+// validateScopeEnvelopesSQL enforces the invariant that every active member
+// grant of read+ access has a matching, non-revoked scope key envelope. Without
+// this check a config push can persist access policy with no cryptographic
+// material, which silently locks the recipient out of the scope (the reported
+// permission_denied on env status) and, for a brand-new scope, strands the
+// scope key with no way to recover it. It must run after the snapshot, approved
+// decisions, and envelope inserts have all been applied within the transaction.
+func validateScopeEnvelopesSQL(ctx context.Context, tx *sql.Tx, teamID string) error {
+	rows, err := tx.QueryContext(ctx, `
+		select s.name, sar.subject_value
+		from scope_access_rules sar
+		join scopes s on s.id = sar.scope_id
+		where sar.team_id = $1
+		  and sar.active = true
+		  and sar.subject_type = 'member'
+		  and sar.permission in ('read', 'write', 'admin')
+		  and not exists (
+		    select 1
+		    from scope_key_envelopes ske
+		    where ske.team_id = sar.team_id
+		      and ske.scope_id = sar.scope_id
+		      and ske.recipient_key_sha = sar.subject_value
+		      and ske.revoked_at is null
+		  )
+		order by s.name, sar.subject_value
+	`, teamID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var missing []string
+	for rows.Next() {
+		var scopeName, recipient string
+		if err := rows.Scan(&scopeName, &recipient); err != nil {
+			return err
+		}
+		missing = append(missing, fmt.Sprintf("scope %q recipient %s", scopeName, recipient))
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", ErrScopeEnvelopeMissing, strings.Join(missing, "; "))
+	}
+	return nil
 }
 
 func (s *SQLStore) GetKeyEnvelope(ctx context.Context, teamID string, scopeName string, actor domain.Member) (domain.ScopeEnvelopeData, error) {

@@ -259,7 +259,7 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 		}
 	}
 
-	newScopeEnvelopes, err := buildNewScopeEnvelopesIfNeeded(context.Background(), client, ident, project, project, status)
+	newScopeEnvelopes, err := buildNewScopeEnvelopes(context.Background(), client, ident, project, project)
 	if err != nil {
 		return ConfigPushResult{}, err
 	}
@@ -326,11 +326,15 @@ func runConfigPush(opts configPushOptions, streams Streams) (ConfigPushResult, e
 	return result, nil
 }
 
-func buildNewScopeEnvelopesIfNeeded(ctx context.Context, client apiclient.Client, ident identity.Identity, project config.ParsedProject, target config.ParsedProject, status apiclient.ConfigStatusData) ([]apiclient.ScopeKeyEnvelope, error) {
-	cloudScopeCount, ok := safeSummaryInt(status.SafeSummary, "scopes_count")
-	if !ok || len(target.Scopes) <= cloudScopeCount {
-		return nil, nil
-	}
+// buildNewScopeEnvelopes creates scope key envelopes for every scope that the
+// target config introduces but the cloud config does not yet have. New scopes
+// are detected by name diff against the current cloud snapshot, not by counting
+// scopes: a count-based heuristic silently skips envelope creation whenever the
+// scope count does not strictly increase (for example when a scope is added and
+// another removed in the same push, or when the safe summary count is missing),
+// which grants scope access with no matching envelope and permanently locks
+// readers out of the scope.
+func buildNewScopeEnvelopes(ctx context.Context, client apiclient.Client, ident identity.Identity, project config.ParsedProject, target config.ParsedProject) ([]apiclient.ScopeKeyEnvelope, error) {
 	cloudConfig, err := client.GetConfig(ctx, ident, project.TeamID)
 	if err != nil {
 		return nil, mapAPIError(err, "Cannot fetch current cloud config before creating scope envelopes")
@@ -362,6 +366,7 @@ func buildNewScopeEnvelopesIfNeeded(ctx context.Context, client apiclient.Client
 		if err != nil {
 			return nil, commandError(ExitInternalError, "internal_error", fmt.Sprintf("Cannot create scope key for %q", scope.Name), err)
 		}
+		readable := 0
 		for _, member := range target.Members {
 			if !scopeMemberCanRead(scope, member) {
 				continue
@@ -377,31 +382,21 @@ func buildNewScopeEnvelopesIfNeeded(ctx context.Context, client apiclient.Client
 				EncryptedScopeKey: encryptedScopeKey,
 				Algorithm:         secretcrypto.EnvelopeAlgorithm,
 			})
+			readable++
+		}
+		if readable == 0 {
+			// A new scope with no reader would strand it: no envelope means the
+			// scope key is unrecoverable and nobody could ever read it. Refuse to
+			// publish rather than create an inaccessible scope.
+			return nil, commandError(
+				ExitValidationError,
+				"config_invalid",
+				fmt.Sprintf("New scope %q grants no member read access; add at least one member with read or write before pushing", scope.Name),
+				nil,
+			)
 		}
 	}
 	return envelopes, nil
-}
-
-func safeSummaryInt(summary map[string]any, key string) (int, bool) {
-	if summary == nil {
-		return 0, false
-	}
-	switch value := summary[key].(type) {
-	case int:
-		return value, true
-	case int64:
-		return int(value), true
-	case float64:
-		return int(value), true
-	case json.Number:
-		parsed, err := value.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(parsed), true
-	default:
-		return 0, false
-	}
 }
 
 func scopeMemberCanRead(scope config.ScopeSummary, member config.Member) bool {

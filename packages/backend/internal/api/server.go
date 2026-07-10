@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	defaultAPIVersion = "0.1.0-dev"
+	defaultAPIVersion = "0.1.1-dev"
 	defaultMinCLI     = "0.1.0-dev"
 	defaultMaxBody    = 4 << 20
 )
@@ -147,7 +147,7 @@ func (s *Server) handleRelayPublicKey(w http.ResponseWriter, r *http.Request) {
 		OK:        true,
 		RequestID: requestID,
 		Data: map[string]any{
-			"relay_public_key": secretcrypto.FormatX25519PublicKey(s.config.RelayPublicKey),
+			"relay_public_key":  secretcrypto.FormatX25519PublicKey(s.config.RelayPublicKey),
 			"relay_key_version": 1,
 		},
 	})
@@ -621,6 +621,8 @@ func (s *Server) writeStorageError(w http.ResponseWriter, requestID string, oper
 		s.writeError(w, requestID, operationID, newAPIError(http.StatusConflict, "secret_version_conflict", "one or more variables changed before this write"))
 	case errors.Is(err, storage.ErrInviteNotActive):
 		s.writeError(w, requestID, operationID, newAPIError(http.StatusConflict, "invite_not_active", "invite is not in a state that allows this operation"))
+	case errors.Is(err, storage.ErrScopeEnvelopeMissing):
+		s.writeError(w, requestID, operationID, newAPIError(http.StatusUnprocessableEntity, "scope_envelope_missing", err.Error()))
 	default:
 		apiErr := newAPIError(http.StatusInternalServerError, "server_error", "request could not be completed")
 		apiErr.body.Retryable = true

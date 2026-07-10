@@ -411,3 +411,160 @@ func TestConfigPushUploadsEnvelopeForCreatedScope(t *testing.T) {
 		t.Fatalf("output missing envelope count:\n%s", stdout.String())
 	}
 }
+
+// TestConfigPushUploadsEnvelopeWhenScopeCountUnchanged reproduces the bug where a
+// config push that introduces a new scope without increasing the total scope
+// count (here, one scope replaces another) silently skipped envelope creation.
+// The new scope must still receive an envelope so its readers are not locked out.
+func TestConfigPushUploadsEnvelopeWhenScopeCountUnchanged(t *testing.T) {
+	repo := initGitRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var initStdout, initStderr bytes.Buffer
+	code := Run([]string{
+		"init",
+		"--handle", "alice@example.com",
+		"--team-name", "Acme API",
+		"--yes",
+		"--non-interactive",
+		"--skip-agent-guidance",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &initStdout,
+		Err:     &initStderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("init exit = %d, stderr:\n%s", code, initStderr.String())
+	}
+	setConfigRevision(t, repo, "rev_00001")
+
+	// Capture the cloud snapshot as-is (a single scope), then rewrite the local
+	// config so it has the same number of scopes but a different scope name.
+	cloudProject, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloudSnapshot, err := config.SnapshotJSON(cloudProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloudScopeCount := len(cloudProject.Scopes)
+	adminIdent, err := identity.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localProject, err := config.ReadProject(filepath.Join(repo, "propagate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localProject.Scopes = []config.ScopeSummary{{Name: "staging", EnvFiles: []string{".env.staging"}}}
+	for i := range localProject.Members {
+		if !config.MemberCanManage(localProject.Members[i]) {
+			continue
+		}
+		localProject.Members[i].Scopes = map[string]string{"staging": "write"}
+	}
+	if len(localProject.Scopes) != cloudScopeCount {
+		t.Fatalf("test setup expected equal scope counts, got local=%d cloud=%d", len(localProject.Scopes), cloudScopeCount)
+	}
+	rendered, err := config.RenderParsed(localProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteRaw(filepath.Join(repo, "propagate.yaml"), rendered); err != nil {
+		t.Fatal(err)
+	}
+
+	var sawPush bool
+	var handlerErr error
+	previousClient := configPushHTTPClient
+	t.Cleanup(func() { configPushHTTPClient = previousClient })
+	configPushHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get(apiclient.HeaderPublicKeySHA) == "" || r.Header.Get(apiclient.HeaderSignature) == "" {
+			handlerErr = fmt.Errorf("request missing signing headers")
+			return nil, handlerErr
+		}
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config/status"):
+			return testResponse(t, http.StatusOK, map[string]any{
+				"local_revision":     "rev_00001",
+				"cloud_revision":     "rev_00001",
+				"local_config_hash":  r.URL.Query().Get("local_config_hash"),
+				"cloud_config_hash":  "sha256:cloud",
+				"state":              "local_ahead",
+				"recommended_action": "push",
+				"safe_summary": map[string]any{
+					"members_count": float64(1),
+					// Equal to the local scope count: the old count heuristic would
+					// skip envelope creation entirely here.
+					"scopes_count": float64(cloudScopeCount),
+				},
+			}), nil
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			return testResponse(t, http.StatusOK, map[string]any{
+				"config_revision": "rev_00001",
+				"config_hash":     "sha256:cloud",
+				"config_snapshot": json.RawMessage(cloudSnapshot),
+				"server_time":     time.Now().UTC().Format(time.RFC3339),
+			}), nil
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/config/push"):
+			sawPush = true
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			var request struct {
+				ScopeKeyEnvelopes []apiclient.ScopeKeyEnvelope `json:"scope_key_envelopes"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				handlerErr = err
+				return nil, handlerErr
+			}
+			if len(request.ScopeKeyEnvelopes) != 1 {
+				handlerErr = fmt.Errorf("scope key envelopes = %d, want 1", len(request.ScopeKeyEnvelopes))
+				return nil, handlerErr
+			}
+			envelope := request.ScopeKeyEnvelopes[0]
+			if envelope.Scope != "staging" || envelope.RecipientKeySHA != adminIdent.PublicKeySHA || envelope.EncryptedScopeKey == "" {
+				handlerErr = fmt.Errorf("unexpected new scope envelope: %+v", envelope)
+				return nil, handlerErr
+			}
+			return testResponse(t, http.StatusOK, map[string]any{
+				"old_revision":       "rev_00001",
+				"new_revision":       "rev_00002",
+				"config_hash":        "sha256:accepted",
+				"envelopes_count":    float64(1),
+				"audit_events_count": float64(1),
+			}), nil
+		default:
+			handlerErr = fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, handlerErr
+		}
+	}), Timeout: 2 * time.Second}
+
+	var stdout, stderr bytes.Buffer
+	code = Run([]string{
+		"config", "push",
+		"--api-url", "http://propagate.test",
+		"--yes",
+		"--non-interactive",
+	}, Streams{
+		In:      strings.NewReader(""),
+		Out:     &stdout,
+		Err:     &stderr,
+		WorkDir: repo,
+	})
+	if code != ExitSuccess {
+		t.Fatalf("config push exit = %d, stderr:\n%s", code, stderr.String())
+	}
+	if handlerErr != nil {
+		t.Fatal(handlerErr)
+	}
+	if !sawPush {
+		t.Fatalf("fake API did not receive config push")
+	}
+}

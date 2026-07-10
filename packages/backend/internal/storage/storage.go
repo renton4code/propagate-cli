@@ -21,6 +21,11 @@ var (
 	ErrInviteNotActive       = errors.New("invite is not active")
 	ErrJoinRequestNotFound   = errors.New("join request not found")
 	ErrJoinRequestDuplicate  = errors.New("duplicate join request")
+	// ErrScopeEnvelopeMissing means the resulting state would grant a member
+	// read+ access to a scope without a matching scope key envelope, leaving the
+	// scope key unrecoverable for that recipient. This guards the invariant that
+	// access policy and cryptographic material stay consistent.
+	ErrScopeEnvelopeMissing = errors.New("scope access granted without key envelope")
 )
 
 type Store interface {
